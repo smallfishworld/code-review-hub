@@ -1,0 +1,16 @@
+dist/
+node_modules/
+data/
+*.log
+.env
+.env.local
+.DS_Store
+Thumbs.db
+data-config.json
+server/data/
+web/node_modules/
+web/dist/
+dist-win/
+.claude/
+.agents/
+dist-mac/

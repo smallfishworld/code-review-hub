@@ -1,0 +1,375 @@
+import Database from 'better-sqlite3';
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+
+export type RepoType = 'svn' | 'git';
+
+export const SCHEMA_VERSION = 8;
+
+/**
+ * Ordered, append-only list of migrations. Each entry runs once, tracked in
+ * the `schema_migrations` table. Never edit an already-shipped migration.
+ */
+const MIGRATIONS: { version: number; name: string; up: (db: Database.Database) => void }[] = [
+  {
+    version: 1,
+    name: 'initial-schema',
+    up: (db) => {
+      // Repos: SVN or Git remotes known to the platform.
+      db.exec(`
+        CREATE TABLE repo (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          type TEXT NOT NULL CHECK (type IN ('svn','git')),
+          name TEXT NOT NULL UNIQUE,
+          url TEXT NOT NULL,
+          username TEXT,
+          credential_id INTEGER REFERENCES credential(id),
+          branch TEXT,               -- git only: monitored branch, e.g. main
+          enabled INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        );
+      `);
+
+      // Encrypted credentials (blob = AES-256-GCM payload, see crypto/secrets).
+      db.exec(`
+        CREATE TABLE credential (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          label TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('svn','git','llm','smtp','chat','admin')),
+          ciphertext BLOB NOT NULL,
+          iv BLOB NOT NULL,
+          auth_tag BLOB NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        );
+      `);
+
+      // LLM provider config forwarded to the ocr CLI.
+      db.exec(`
+        CREATE TABLE provider (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL UNIQUE,
+          api_base TEXT NOT NULL,
+          model TEXT NOT NULL,
+          credential_id INTEGER REFERENCES credential(id),
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        );
+      `);
+
+      // Monitoring rules: one per repo (poll interval, author/path filters).
+      db.exec(`
+        CREATE TABLE monitor_rule (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          repo_id INTEGER NOT NULL UNIQUE REFERENCES repo(id) ON DELETE CASCADE,
+          interval_seconds INTEGER NOT NULL CHECK (interval_seconds >= 30),
+          author_whitelist TEXT NOT NULL DEFAULT '[]',  -- JSON array of names; empty = all
+          path_prefixes TEXT NOT NULL DEFAULT '[]',     -- JSON array of path prefixes; empty = all
+          backtrack_nodes INTEGER NOT NULL DEFAULT 0,   -- on first enable, review last N nodes
+          enabled INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        );
+      `);
+
+      // Per-rule polling state: last processed node (SVN revision number or
+      // git commit sha) plus bookkeeping. Survives restarts.
+      db.exec(`
+        CREATE TABLE monitor_state (
+          rule_id INTEGER PRIMARY KEY REFERENCES monitor_rule(id) ON DELETE CASCADE,
+          last_node TEXT,             -- last processed revision/sha; NULL = not started
+          last_poll_at TEXT,
+          last_poll_error TEXT,
+          init_status TEXT NOT NULL DEFAULT 'ready'
+            CHECK (init_status IN ('ready','cloning','failed')),
+          updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        );
+      `);
+
+      // Review tasks. node = svn revision number or git commit sha.
+      // repo_id is a soft reference: repos can be deleted while task
+      // history is preserved (spec: deleting a repo keeps its reports).
+      db.exec(`
+        CREATE TABLE task (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          repo_id INTEGER NOT NULL,
+          node TEXT NOT NULL,
+          trigger TEXT NOT NULL CHECK (trigger IN ('manual','auto')),
+          status TEXT NOT NULL DEFAULT 'queued'
+            CHECK (status IN ('queued','running','succeeded','failed','cancelled')),
+          author TEXT,
+          error TEXT,
+          ocr_exit_code INTEGER,
+          started_at TEXT,
+          finished_at TEXT,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          UNIQUE (repo_id, node, trigger)
+        );
+        CREATE INDEX idx_task_status ON task(status);
+        CREATE INDEX idx_task_repo_node ON task(repo_id, node);
+      `);
+
+      // Parsed report index; raw ocr JSON lives in data/reports/<task-id>.json.
+      db.exec(`
+        CREATE TABLE report (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          task_id INTEGER NOT NULL UNIQUE REFERENCES task(id),
+          summary TEXT,
+          issue_count INTEGER NOT NULL DEFAULT 0,
+          raw_path TEXT NOT NULL,           -- path to the raw ocr JSON file
+          parsed_ok INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        );
+      `);
+
+      // Per-issue index extracted from reports for filtering/display.
+      db.exec(`
+        CREATE TABLE report_issue (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          report_id INTEGER NOT NULL REFERENCES report(id) ON DELETE CASCADE,
+          file TEXT,
+          line INTEGER,
+          severity TEXT,
+          description TEXT NOT NULL
+        );
+        CREATE INDEX idx_issue_report ON report_issue(report_id);
+      `);
+
+      // Notification channels: email (SMTP) or chat webhook.
+      db.exec(`
+        CREATE TABLE notification_channel (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          type TEXT NOT NULL CHECK (type IN ('email','chat')),
+          name TEXT NOT NULL UNIQUE,
+          enabled INTEGER NOT NULL DEFAULT 0,
+          config TEXT NOT NULL DEFAULT '{}',  -- JSON, non-secret parts
+          credential_id INTEGER REFERENCES credential(id),
+          template TEXT,                      -- chat: message template
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        );
+      `);
+
+      // Notification send log: success or final-failure per (task, channel).
+      db.exec(`
+        CREATE TABLE notification_log (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          task_id INTEGER NOT NULL REFERENCES task(id),
+          channel_id INTEGER NOT NULL REFERENCES notification_channel(id),
+          status TEXT NOT NULL CHECK (status IN ('sent','failed')),
+          detail TEXT,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        );
+        CREATE INDEX idx_notif_log_task ON notification_log(task_id);
+      `);
+
+      // Global notification trigger rule: all | failed_only | success_only.
+      db.exec(`
+        CREATE TABLE setting (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+        INSERT INTO setting (key, value) VALUES ('notification_trigger', 'all');
+      `);
+
+      // Admin password (bcrypt hash).
+      db.exec(`
+        INSERT INTO setting (key, value) VALUES ('admin_password', '');
+      `);
+    },
+  },
+  {
+    version: 2,
+    name: 'monitor-log',
+    up: (db) => {
+      // Per-node monitoring decisions: triggered or skipped (with reason).
+      // Powers the monitor status panel ("最近触发/跳过记录").
+      db.exec(`
+        CREATE TABLE monitor_log (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          rule_id INTEGER NOT NULL REFERENCES monitor_rule(id) ON DELETE CASCADE,
+          node TEXT NOT NULL,
+          action TEXT NOT NULL CHECK (action IN ('triggered','skipped')),
+          reason TEXT,
+          author TEXT,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        );
+        CREATE INDEX idx_monitor_log_rule ON monitor_log(rule_id, id DESC);
+      `);
+    },
+  },
+  {
+    version: 3,
+    name: 'provider-protocol',
+    up: (db) => {
+      // LLM wire protocol used when forwarding this provider to ocr
+      // (anthropic | anthropic-bedrock | openai | openai-responses).
+      db.exec(`
+        ALTER TABLE provider ADD COLUMN protocol TEXT NOT NULL DEFAULT 'anthropic';
+      `);
+    },
+  },
+  {
+    version: 4,
+    name: 'report-issue-suggestion',
+    up: (db) => {
+      // ocr comments carry an optional `suggestion_code`; the console's report
+      // detail shows it next to the problem description.
+      db.exec(`
+        ALTER TABLE report_issue ADD COLUMN suggestion TEXT;
+      `);
+    },
+  },
+  {
+    version: 5,
+    name: 'monitor-head-node',
+    up: (db) => {
+      // Latest node seen on the remote at the last poll (SVN HEAD revision or
+      // git branch head sha). The console's monitor panel shows it as
+      // "最新节点" next to the processed position.
+      db.exec(`
+        ALTER TABLE monitor_state ADD COLUMN head_node TEXT;
+      `);
+    },
+  },
+  {
+    version: 6,
+    name: 'task-retrigger-after-cancel',
+    up: (db) => {
+      // The old UNIQUE (repo_id, node, trigger) made a cancelled task
+      // permanently block re-triggering the same node: the INSERT hit the
+      // constraint and the queue returned the stale cancelled row instead.
+      // Terminal states (succeeded/failed/cancelled) must be history, not
+      // locks. Rebuild the table without the hard UNIQUE and enforce "at most
+      // one active task per (repo,node,trigger)" with a partial unique index
+      // over queued/running rows only. SQLite cannot drop a table constraint,
+      // so this is the canonical create-copy-drop-rename rebuild.
+      db.exec(`
+        CREATE TABLE task_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          repo_id INTEGER NOT NULL,
+          node TEXT NOT NULL,
+          trigger TEXT NOT NULL CHECK (trigger IN ('manual','auto')),
+          status TEXT NOT NULL DEFAULT 'queued'
+            CHECK (status IN ('queued','running','succeeded','failed','cancelled')),
+          author TEXT,
+          error TEXT,
+          ocr_exit_code INTEGER,
+          started_at TEXT,
+          finished_at TEXT,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        );
+        INSERT INTO task_new (id, repo_id, node, trigger, status, author, error,
+                              ocr_exit_code, started_at, finished_at, created_at)
+          SELECT id, repo_id, node, trigger, status, author, error,
+                 ocr_exit_code, started_at, finished_at, created_at FROM task;
+        DROP TABLE task;
+        ALTER TABLE task_new RENAME TO task;
+        CREATE INDEX idx_task_status ON task(status);
+        CREATE INDEX idx_task_repo_node ON task(repo_id, node);
+        CREATE UNIQUE INDEX idx_task_active ON task(repo_id, node, trigger)
+          WHERE status IN ('queued','running');
+      `);
+    },
+  },
+  {
+    version: 7,
+    name: 'repo-init-status',
+    up: (db) => {
+      // Workspace prewarm bookkeeping: the platform downloads the repo (SVN
+      // checkout / git clone) right after the repo is saved instead of
+      // lazily on the first review, so the console can show an
+      // "initializing" state and the first review does not absorb the whole
+      // download. Existing repos default to 'ready' (they may already have
+      // a workspace; the prewarm pass treats 'ready' with no workspace as
+      // needing init anyway).
+      db.exec(`
+        ALTER TABLE repo ADD COLUMN init_status TEXT NOT NULL DEFAULT 'ready'
+          CHECK (init_status IN ('pending','preparing','ready','failed'));
+        ALTER TABLE repo ADD COLUMN init_error TEXT;
+        ALTER TABLE repo ADD COLUMN init_updated_at TEXT;
+      `);
+    },
+  },
+  {
+    version: 8,
+    name: 'report-issue-category',
+    up: (db) => {
+      // ocr comments carry a `category` (bug/security/performance/…); the
+      // console's report detail shows it as a "缺陷类型" column next to
+      // severity. Backfill is unnecessary: reports are re-indexable from
+      // their raw JSON, but existing rows keep category empty until then.
+      db.exec(`
+        ALTER TABLE report_issue ADD COLUMN category TEXT;
+      `);
+    },
+  },
+];
+
+export class DatabaseError extends Error {}
+
+export interface DbOptions {
+  /** Directory that will contain the SQLite file. Created if missing. */
+  dataDir: string;
+  /** File name inside dataDir. */
+  fileName?: string;
+  /** Skip the built-in migration runner (tests only). */
+  skipMigrations?: boolean;
+}
+
+/**
+ * Open (and migrate) the platform database.
+ *
+ * Migrations run inside a transaction; applied versions are recorded in
+ * schema_migrations so restarts are idempotent and data persists.
+ */
+export function openDatabase(opts: DbOptions): Database.Database {
+  mkdirSync(opts.dataDir, { recursive: true });
+  const db = new Database(join(opts.dataDir, opts.fileName ?? 'platform.db'));
+
+  db.pragma('journal_mode = WAL');
+  db.pragma('foreign_keys = ON');
+
+  if (opts.skipMigrations) return db;
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      version INTEGER PRIMARY KEY,
+      name TEXT NOT NULL,
+      applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );
+  `);
+
+  const applied = new Set(
+    (db.prepare('SELECT version FROM schema_migrations').all() as { version: number }[]).map(
+      (r) => r.version
+    )
+  );
+
+  for (const m of MIGRATIONS) {
+    if (applied.has(m.version)) continue;
+    const tx = db.transaction(() => {
+      m.up(db);
+      db.prepare('INSERT INTO schema_migrations (version, name) VALUES (?, ?)').run(
+        m.version,
+        m.name
+      );
+    });
+    tx();
+  }
+
+  const current = db.pragma('user_version', { simple: true }) as number;
+  if (current !== SCHEMA_VERSION) {
+    db.pragma(`user_version = ${SCHEMA_VERSION}`);
+  }
+
+  return db;
+}
+
+/** Names of all tables created by migrations (for tests). */
+export function listTables(db: Database.Database): string[] {
+  const rows = db
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+    .all() as { name: string }[];
+  return rows.map((r) => r.name).sort();
+}

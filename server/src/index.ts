@@ -1,0 +1,143 @@
+import Fastify from 'fastify';
+import { checkDependencies, formatReport } from './deps/detector.js';
+import { openDatabase } from './db/database.js';
+import { SecretStore } from './crypto/secrets.js';
+import { CredentialService } from './crypto/credentialService.js';
+import { buildRepoRoutes } from './repos/repoRoutes.js';
+import { TaskQueue } from './tasks/taskQueue.js';
+import { OcrRunner } from './tasks/ocrRunner.js';
+import { ReportService } from './tasks/reportService.js';
+import { TaskEventHub } from './tasks/taskEvents.js';
+import { buildTaskRoutes } from './tasks/taskRoutes.js';
+import { WorkspaceInitService } from './tasks/workspaceInit.js';
+import { MonitorService } from './monitor/monitorService.js';
+import { buildMonitorRoutes } from './monitor/monitorRoutes.js';
+import { buildProviderRoutes } from './providers/providerRoutes.js';
+import { buildNotificationRoutes } from './notifications/notificationRoutes.js';
+import { buildAuthRoutes } from './auth/authRoutes.js';
+import { LogService } from './logs/logService.js';
+import { buildLogRoutes } from './logs/logRoutes.js';
+import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join, resolve } from 'node:path';
+import fastifyStatic from '@fastify/static';
+
+const port = Number(process.env.PORT ?? 3000);
+const host = process.env.HOST ?? '0.0.0.0';
+const dataDir = process.env.DATA_DIR ?? join(process.cwd(), 'data');
+/** Set AUTH_REQUIRED=false to disable the admin-password guard. */
+const authRequired = process.env.AUTH_REQUIRED !== 'false';
+
+/** Runtime log sink shared by every service and the web console. */
+const logs = new LogService(5000, dataDir);
+
+const app = Fastify({
+  logger: {
+    level: process.env.LOG_LEVEL ?? 'info',
+    // Mirror pino output into the runtime log so the web console sees HTTP
+    // errors too. request-level info lines are noisy at debug; keep them out.
+    stream: {
+      write(msg: string) {
+        try {
+          const row = JSON.parse(msg) as { level?: number; msg?: string; err?: { message?: string } };
+          const level = row.level === 50 ? 'error' : row.level === 40 ? 'warn' : 'info';
+          if (level === 'info' && row.msg === 'request completed') return;
+          const text = row.err?.message ? `${row.msg}: ${row.err.message}` : (row.msg ?? msg.trim());
+          logs.log(level, 'server', text);
+        } catch {
+          logs.info('server', msg.trim());
+        }
+      },
+    },
+  },
+});
+
+/** Locate the built SPA (web/dist) relative to the repo root. */
+function findWebDist(): string | null {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    resolve(here, '../../web/dist'), // server/dist -> repo/web/dist
+    resolve(here, '../../../web/dist'), // server/src -> repo/web/dist (tsx)
+    resolve(process.cwd(), 'web/dist'),
+  ];
+  return candidates.find((p) => existsSync(join(p, 'index.html'))) ?? null;
+}
+
+async function main() {
+  // Startup dependency check: svn/git are conditional (per repo type),
+  // ocr is required for reviews.
+  const depReport = await checkDependencies();
+  app.log.info(formatReport(depReport));
+  logs.info('server', `服务启动 (data: ${dataDir})`);
+
+  // --- core services -------------------------------------------------------
+  const db = openDatabase({ dataDir });
+  const credentials = new CredentialService(db, new SecretStore(join(dataDir, 'keys')));
+  const runner = new OcrRunner(db, credentials, { dataDir, logs });
+  const queue = new TaskQueue(db, runner.executor, 2, logs);
+
+  const reports = new ReportService(db);
+  const events = new TaskEventHub(db, queue, reports, dataDir);
+  events.start();
+
+  const monitor = new MonitorService(db, credentials, queue, { dataDir, logs });
+  const workspaceInit = new WorkspaceInitService(db, credentials, dataDir, logs);
+
+  // --- HTTP routes ---------------------------------------------------------
+  // Auth guard first: it hooks onRequest for /api/*.
+  buildAuthRoutes(db, { loginRequired: authRequired }).register(app);
+
+  app.get('/api/health', async () => ({ status: 'ok' }));
+  app.get('/api/deps', async () => depReport);
+  app.post('/api/deps/check', async () => checkDependencies());
+
+  buildRepoRoutes(db, credentials, {
+    onRepoChange: (repoId) => monitor.syncRepo(repoId),
+    dataDir,
+    workspaceInit,
+  }).register(app);
+  buildTaskRoutes(db, credentials, queue, dataDir).register(app);
+  buildMonitorRoutes(db, monitor).register(app);
+  buildLogRoutes(logs).register(app);
+  buildProviderRoutes(db, credentials).register(app);
+  const notifications = buildNotificationRoutes(db, credentials, {
+    reports,
+    senderOptions: { baseUrl: process.env.PUBLIC_BASE_URL ?? `http://localhost:${port}` },
+  });
+  notifications.register(app);
+  notifications.sender?.start(events);
+
+  // --- static SPA (production build) ---------------------------------------
+  const webDist = findWebDist();
+  if (webDist) {
+    await app.register(fastifyStatic, { root: webDist, prefix: '/' });
+    // SPA fallback: any non-API GET returns index.html so client routes work
+    app.setNotFoundHandler((req, reply) => {
+      if (req.method === 'GET' && !req.url.startsWith('/api/')) {
+        return reply.sendFile('index.html');
+      }
+      return reply.code(404).send({ message: 'Not Found' });
+    });
+    app.log.info(`serving web console from ${webDist}`);
+  } else {
+    app.log.warn('web/dist not found — run `npm run build:web` to serve the console');
+  }
+
+  // --- startup recovery ----------------------------------------------------
+  queue.recoverFromRestart();
+  monitor.start();
+
+  app.addHook('onClose', async () => {
+    monitor.stop();
+    queue.stop();
+    db.close();
+  });
+
+  await app.listen({ port, host });
+  app.log.info(`code review platform listening on http://${host}:${port} (data: ${dataDir})`);
+}
+
+main().catch((err) => {
+  app.log.error(err);
+  process.exit(1);
+});

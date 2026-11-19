@@ -1,0 +1,1324 @@
+/* Application shell + component styles. Tokens live in index.css; every rule
+   here sits in the `components` layer so utilities can always win. */
+@layer components {
+  /* ---------------------------------------------------------------- shell */
+  .app-shell {
+    display: grid;
+    grid-template-columns: 232px minmax(0, 1fr);
+    min-height: 100vh;
+  }
+
+  .sidebar {
+    position: sticky;
+    inset-block-start: 0;
+    align-self: start;
+    height: 100vh;
+    height: 100dvh;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    padding: 22px 14px 16px;
+    background: var(--surface-subtle);
+    border-inline-end: 1px solid var(--border);
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding-inline: 8px;
+    font-weight: 700;
+    font-size: 16px;
+    letter-spacing: -0.01em;
+    color: var(--text-h);
+  }
+
+  .brand::before {
+    content: '';
+    flex: none;
+    inline-size: 22px;
+    block-size: 22px;
+    border-radius: 7px;
+    background: linear-gradient(140deg, var(--accent), color-mix(in srgb, var(--accent) 45%, #2ea043));
+    box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.25);
+  }
+
+  .sidebar nav {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .nav-item {
+    position: relative;
+    display: flex;
+    align-items: center;
+    min-block-size: 38px;
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    text-decoration: none;
+    font-size: 14.5px;
+    transition: background-color 120ms ease, color 120ms ease;
+  }
+
+  .nav-item:hover:not(.active) {
+    background: color-mix(in srgb, var(--text-h) 6%, transparent);
+    color: var(--text-h);
+  }
+
+  .nav-item.active {
+    background: var(--accent-bg);
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .nav-item.active::before {
+    content: '';
+    position: absolute;
+    inset-block: 9px;
+    inset-inline-start: 0;
+    inline-size: 3px;
+    border-radius: 999px;
+    background: var(--accent);
+  }
+
+  .sidebar-footer {
+    margin-block-start: auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 12px 8px 0;
+    border-block-start: 1px solid var(--border);
+    font-size: 13.5px;
+  }
+
+  .content {
+    min-width: 0;
+    padding: 26px 32px 72px;
+    max-inline-size: 1440px;
+  }
+
+  /* ----------------------------------------------------------- page header */
+  .page-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-block-end: 20px;
+  }
+
+  .page-head h1 {
+    font-size: 22px;
+    line-height: 1.3;
+    letter-spacing: -0.02em;
+    margin: 0;
+    color: var(--text-h);
+  }
+
+  h2 {
+    font-size: 16px;
+    letter-spacing: -0.01em;
+    margin: 0 0 14px;
+    color: var(--text-h);
+  }
+
+  h3 {
+    font-size: 14.5px;
+    margin: 20px 0 10px;
+    color: var(--text-h);
+  }
+
+  /* ---------------------------------------------------------------- cards */
+  .card {
+    min-width: 0;
+    padding: 20px;
+    margin-block-end: 18px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    box-shadow: var(--shadow-sm);
+  }
+
+  .card.narrow {
+    max-inline-size: 620px;
+  }
+
+  .split {
+    display: flex;
+    gap: 18px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .split > .card {
+    flex: 0 0 400px;
+    min-inline-size: 0;
+  }
+
+  .split > .card.grow {
+    flex: 1 1 480px;
+    min-inline-size: 0;
+  }
+
+  /* ---------------------------------------------------------------- forms */
+  .form {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  label {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 13.5px;
+    font-weight: 500;
+    color: var(--text);
+  }
+
+  label.checkbox,
+  label.radio {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    min-block-size: 24px;
+    font-weight: 400;
+    cursor: pointer;
+  }
+
+  input,
+  select,
+  textarea {
+    font: inherit;
+    font-size: 14px;
+    min-block-size: 36px;
+    padding: 7px 10px;
+    inline-size: 100%;
+    color: var(--text-h);
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    transition: border-color 120ms ease, box-shadow 120ms ease;
+  }
+
+  input:hover:not(:disabled),
+  select:hover:not(:disabled),
+  textarea:hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--accent) 40%, var(--border-strong));
+  }
+
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible {
+    border-color: var(--accent);
+    outline: 3px solid var(--focus-ring);
+    outline-offset: 1px;
+  }
+
+  input:disabled,
+  select:disabled,
+  textarea:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  input[type='checkbox'],
+  input[type='radio'] {
+    inline-size: 16px;
+    block-size: 16px;
+    min-block-size: 0;
+    padding: 0;
+    accent-color: var(--accent);
+    flex: none;
+  }
+
+  textarea {
+    min-block-size: 72px;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.5;
+    resize: vertical;
+  }
+
+  .two-col {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+  }
+
+  /* The provider list carries six columns; side-by-side with the form it
+     collapses into a horizontal scrollbar. Stack the form above it instead. */
+  .split.providers-split {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .split.providers-split > .card {
+    flex: 0 0 auto;
+    inline-size: 100%;
+  }
+
+  .split.providers-split > .card:first-child {
+    max-inline-size: 620px;
+  }
+
+  /* ------------------------------------------------------------- combobox */
+  /* The popup is absolutely positioned inside this wrapper rather than using
+     CSS anchor positioning (Chrome 157+/Safari 27+, no Firefox) so it works
+     everywhere the console is opened. */
+  .combobox {
+    position: relative;
+  }
+
+  .combobox-control {
+    display: flex;
+    align-items: stretch;
+  }
+
+  .combobox-control input {
+    /* Square off the right edge so the toggle reads as part of one control. */
+    border-start-end-radius: 0;
+    border-end-end-radius: 0;
+  }
+
+  .combobox-toggle {
+    flex: none;
+    inline-size: 36px;
+    min-block-size: 36px;
+    padding: 0;
+    color: var(--text);
+    background: var(--surface-subtle);
+    border: 1px solid var(--border-strong);
+    border-inline-start: none;
+    border-start-end-radius: var(--radius-sm);
+    border-end-end-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+
+  .combobox-toggle:hover:not(:disabled) {
+    background: var(--accent-bg);
+    color: var(--text-h);
+  }
+
+  .combobox-toggle:focus-visible {
+    outline: 3px solid var(--focus-ring);
+    outline-offset: 1px;
+  }
+
+  .combobox-popup {
+    position: absolute;
+    z-index: 20;
+    inset-block-start: calc(100% + 4px);
+    inset-inline: 0;
+    max-block-size: 320px;
+    overflow-y: auto;
+    padding: 4px;
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    box-shadow: 0 10px 28px rgb(0 0 0 / 18%);
+  }
+
+  /* Near the bottom of the window the list opens upwards instead of being
+     clipped by the viewport edge. */
+  .combobox-popup.flip {
+    inset-block-start: auto;
+    inset-block-end: calc(100% + 4px);
+  }
+
+  .combobox-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .combobox-option {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 7px 9px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+
+  .combobox-option.active {
+    background: var(--accent-bg);
+  }
+
+  .combobox-option-head {
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+    justify-content: space-between;
+  }
+
+  .combobox-node {
+    font-weight: 600;
+    color: var(--text-h);
+  }
+
+  .combobox-meta {
+    flex: none;
+    font-size: 12px;
+    color: var(--text);
+    opacity: 0.8;
+    white-space: nowrap;
+  }
+
+  .combobox-message {
+    font-size: 13px;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .combobox-status {
+    margin: 0;
+    padding: 10px;
+    font-size: 13px;
+    color: var(--text);
+  }
+
+  .combobox-status.error {
+    color: var(--danger);
+  }
+
+  /* End-of-history marker while paging backwards through the node list. */
+  .combobox-end {
+    text-align: center;
+    border-block-start: 1px solid var(--border);
+    color: var(--text);
+    opacity: 0.75;
+  }
+
+  .combobox-hint {
+    margin: 0;
+    padding: 6px 9px 4px;
+    font-size: 12px;
+    color: var(--text);
+    opacity: 0.75;
+    border-block-start: 1px solid var(--border);
+  }
+
+  .radio-row {
+    display: flex;
+    gap: 18px;
+    flex-wrap: wrap;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-subtle);
+  }
+
+  .actions {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  /* -------------------------------------------------------------- buttons */
+  button {
+    font: inherit;
+    font-size: 14px;
+    font-weight: 500;
+    min-block-size: 36px;
+    padding: 7px 14px;
+    color: var(--text-h);
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background-color 120ms ease, border-color 120ms ease,
+      color 120ms ease, transform 60ms ease;
+  }
+
+  button:hover:not(:disabled) {
+    background: var(--surface-subtle);
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--border-strong));
+  }
+
+  button:active:not(:disabled) {
+    transform: translateY(1px);
+  }
+
+  button:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  button.primary {
+    color: var(--on-accent);
+    background: var(--accent);
+    border-color: var(--accent);
+    box-shadow: var(--shadow-sm);
+  }
+
+  button.primary:hover:not(:disabled) {
+    background: var(--accent-hover);
+    border-color: var(--accent-hover);
+  }
+
+  button.secondary {
+    background: var(--surface-subtle);
+  }
+
+  /* Filled danger button (dialog confirm). `:not(.link)` keeps the inline
+     text-button variant from picking up the red fill. */
+  button.danger:not(.link) {
+    color: #fff;
+    background: var(--danger);
+    border-color: var(--danger);
+    box-shadow: var(--shadow-sm);
+  }
+
+  button.danger:not(.link):hover:not(:disabled) {
+    background: color-mix(in srgb, var(--danger) 86%, #000);
+    border-color: color-mix(in srgb, var(--danger) 86%, #000);
+  }
+
+  button.link {
+    min-block-size: 28px;
+    padding: 3px 6px;
+    color: var(--accent);
+    background: none;
+    border: none;
+    text-decoration: underline;
+    text-decoration-color: transparent;
+    text-underline-offset: 3px;
+  }
+
+  button.link:hover:not(:disabled) {
+    background: var(--accent-bg);
+    text-decoration-color: currentColor;
+  }
+
+  button.link.danger {
+    color: var(--danger);
+  }
+
+  button.link.danger:hover:not(:disabled) {
+    background: var(--danger-bg);
+  }
+
+  button.small {
+    font-size: 13px;
+    min-block-size: 30px;
+    padding: 4px 10px;
+  }
+
+  /* --------------------------------------------------------------- tables */
+  .table-wrap {
+    /* position: relative keeps absolutely positioned descendants (the
+       .visually-hidden labels inside cells) contained by this scroller;
+       otherwise their containing block is the viewport and the wide table
+       pushes them past the right edge, adding page-level overflow. */
+    position: relative;
+    overflow-x: auto;
+    margin-inline: -4px;
+    padding-inline: 4px;
+  }
+
+  .table {
+    inline-size: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 14px;
+  }
+
+  .table caption {
+    caption-side: top;
+    text-align: start;
+    padding-block-end: 8px;
+    font-size: 13px;
+    color: var(--text);
+  }
+
+  .table th {
+    position: sticky;
+    inset-block-start: 0;
+    z-index: 1;
+    text-align: start;
+    font-weight: 600;
+    font-size: 12.5px;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: var(--text);
+    background: var(--surface-subtle);
+    border-block-end: 1px solid var(--border);
+    padding: 9px 10px;
+    white-space: nowrap;
+  }
+
+  .table td {
+    padding: 10px;
+    vertical-align: top;
+    border-block-end: 1px solid var(--border);
+  }
+
+  .table tbody tr:last-child td {
+    border-block-end: none;
+  }
+
+  .table tbody tr:hover {
+    background: color-mix(in srgb, var(--accent) 4%, transparent);
+  }
+
+  /* Two-line cell: a strong primary value over a muted secondary one. */
+  .cell-title {
+    display: block;
+    font-weight: 500;
+    color: var(--text-h);
+  }
+
+  .cell-sub {
+    display: block;
+    max-inline-size: 34ch;
+    color: var(--text);
+    opacity: 0.78;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .table.compact td,
+  .table.compact th {
+    padding: 6px 8px;
+    font-size: 13px;
+  }
+
+  .row-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  /* Action columns must not be squeezed by the data columns next to them:
+     without this the table's auto layout shrinks the cell until every link
+     wraps to one character per line. */
+  .table th.actions-cell,
+  .table td.actions-cell {
+    inline-size: 1%;
+    white-space: nowrap;
+  }
+
+  .table td.actions-cell .row-actions {
+    flex-wrap: nowrap;
+  }
+
+  /* Connectivity-test verdict: its own full-width row under the provider, so
+     the message can wrap freely instead of squeezing the action links. */
+  .table tr.test-row td {
+    padding-block-start: 0;
+    border-block-end: 1px solid var(--border);
+  }
+
+  .test-result {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    margin: 0;
+    padding: 8px 10px;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--text);
+    background: var(--surface-subtle);
+    border: 1px solid var(--border);
+    border-inline-start: 3px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    overflow-wrap: anywhere;
+  }
+
+  .test-result-label {
+    flex: none;
+    font-weight: 600;
+    color: var(--text-h);
+  }
+
+  .test-result.ok {
+    background: var(--ok-bg);
+    border-color: color-mix(in srgb, var(--ok) 35%, transparent);
+    border-inline-start-color: var(--ok);
+  }
+
+  .test-result.ok .test-result-label {
+    color: var(--ok);
+  }
+
+  .test-result.fail {
+    background: var(--danger-bg);
+    border-color: color-mix(in srgb, var(--danger) 35%, transparent);
+    border-inline-start-color: var(--danger);
+  }
+
+  .test-result.fail .test-result-label {
+    color: var(--danger);
+  }
+
+  .filter-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px 14px;
+  }
+
+  /* --------------------------------------------------------------- alerts */
+  .alert {
+    display: flex;
+    gap: 8px;
+    padding: 10px 14px;
+    margin-block-end: 14px;
+    font-size: 13.5px;
+    line-height: 1.5;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-subtle);
+  }
+
+  .alert.ok {
+    color: var(--ok);
+    background: var(--ok-bg);
+    border-color: color-mix(in srgb, var(--ok) 40%, transparent);
+  }
+
+  .alert.error {
+    color: var(--danger);
+    background: var(--danger-bg);
+    border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+  }
+
+  .alert.info {
+    color: var(--text-h);
+    background: var(--accent-bg);
+    border-color: var(--accent-border);
+  }
+
+  /* --------------------------------------------------------------- toasts */
+  .toast-region {
+    position: fixed;
+    /* The UA `[popover]` rule sets `inset: 0`; reset it first or the box
+       stays pinned to the top-left corner despite the logical insets. */
+    inset: auto;
+    inset-block-end: 20px;
+    inset-inline-end: 20px;
+    z-index: 900;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    inline-size: min(380px, calc(100vw - 32px));
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    overflow: visible;
+  }
+
+  .toast {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 12px 12px 12px 14px;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--text-h);
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-inline-start: 4px solid var(--accent);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg);
+    opacity: 1;
+    transform: translateY(0);
+    transition: opacity 180ms ease, transform 180ms ease;
+  }
+
+  .toast.ok {
+    border-inline-start-color: var(--ok);
+  }
+
+  .toast.error {
+    border-inline-start-color: var(--danger);
+  }
+
+  .toast-text {
+    flex: 1;
+    min-inline-size: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .toast-close {
+    flex: none;
+    min-block-size: 24px;
+    min-inline-size: 24px;
+    padding: 0 6px;
+    font-size: 16px;
+    line-height: 1;
+    color: var(--text);
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+  }
+
+  .toast-close:hover:not(:disabled) {
+    color: var(--text-h);
+    background: var(--surface-subtle);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .toast {
+      transition: none;
+    }
+  }
+
+  /* --------------------------------------------------------------- dialog */
+  dialog.confirm {
+    inline-size: min(460px, calc(100vw - 32px));
+    padding: 22px;
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+  }
+
+  dialog.confirm::backdrop {
+    background: rgb(10 9 14 / 0.45);
+    overflow: hidden;
+    overscroll-behavior: contain;
+  }
+
+  dialog.confirm:modal {
+    overscroll-behavior: contain;
+  }
+
+  dialog.confirm h2 {
+    margin-block-end: 8px;
+    font-size: 17px;
+  }
+
+  dialog.confirm .confirm-body {
+    margin-block-end: 18px;
+    font-size: 14px;
+    line-height: 1.6;
+    white-space: pre-line;
+  }
+
+  dialog.confirm .actions {
+    justify-content: flex-end;
+  }
+
+  /* ------------------------------------------------------------ utilities */
+  .muted {
+    color: var(--text);
+    opacity: 0.82;
+  }
+
+  .small {
+    font-size: 13px;
+  }
+
+  .mono {
+    font-family: var(--mono);
+    font-size: 12.5px;
+  }
+
+  .ellipsis {
+    max-inline-size: 340px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .nowrap {
+    white-space: nowrap;
+  }
+
+  .prewrap {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 8px;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.7;
+    color: var(--text);
+    background: var(--surface-subtle);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+
+  .tag.svn,
+  .tag.ok,
+  .tag.succeeded,
+  .tag.email {
+    color: var(--ok);
+    background: var(--ok-bg);
+    border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+  }
+
+  .tag.git,
+  .tag.chat {
+    color: var(--info);
+    background: color-mix(in srgb, var(--info) 10%, transparent);
+    border-color: color-mix(in srgb, var(--info) 45%, transparent);
+  }
+
+  .tag.failed,
+  .tag.cancelled {
+    color: var(--danger);
+    background: var(--danger-bg);
+    border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  }
+
+  .tag.running,
+  .tag.queued {
+    color: var(--warn);
+    background: color-mix(in srgb, var(--warn) 12%, transparent);
+    border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+  }
+
+  .tag.off {
+    color: var(--text);
+  }
+
+  /* Workspace prewarm pill: indeterminate spinner while downloading. */
+  .tag.preparing {
+    color: var(--warn);
+    background: color-mix(in srgb, var(--warn) 12%, transparent);
+    border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+  }
+
+  /* Report issue severity scale (评审报告「级别」列). Text label is always
+     present so color is never the sole signal (WCAG 1.4.1). */
+  .tag.severity-critical {
+    color: var(--critical);
+    background: var(--critical-bg);
+    border-color: color-mix(in srgb, var(--critical) 45%, transparent);
+    font-weight: 700;
+  }
+
+  .tag.severity-high {
+    color: var(--danger);
+    background: var(--danger-bg);
+    border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  }
+
+  .tag.severity-medium {
+    color: var(--warn);
+    background: color-mix(in srgb, var(--warn) 12%, transparent);
+    border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+  }
+
+  .tag.severity-low {
+    color: var(--info);
+    background: color-mix(in srgb, var(--info) 10%, transparent);
+    border-color: color-mix(in srgb, var(--info) 45%, transparent);
+  }
+
+  /* Category pill (「缺陷类型」列): neutral outline, distinct from severity. */
+  .tag.category {
+    color: var(--text);
+    background: transparent;
+    border-color: var(--border-strong);
+  }
+
+  .spinner {
+    display: inline-block;
+    inline-size: 10px;
+    block-size: 10px;
+    border: 2px solid color-mix(in srgb, currentColor 30%, transparent);
+    border-block-start-color: currentColor;
+    border-radius: 50%;
+    animation: crp-spin 0.8s linear infinite;
+  }
+
+  @keyframes crp-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .spinner {
+      animation-duration: 1.6s;
+    }
+  }
+
+  /* Failed init is rendered as a pill-button so the whole label is clickable. */
+  button.init-retry {
+    cursor: pointer;
+    font: inherit;
+  }
+
+  button.init-retry:disabled {
+    cursor: default;
+    opacity: 0.7;
+  }
+
+  .dot {
+    display: inline-block;
+    inline-size: 8px;
+    block-size: 8px;
+    margin-inline-end: 6px;
+    border-radius: 50%;
+    background: var(--gray-400);
+  }
+
+  .dot.ok {
+    background: var(--ok);
+    box-shadow: 0 0 0 3px var(--ok-bg);
+  }
+
+  .dot.off {
+    background: var(--gray-400);
+  }
+
+  /* ----------------------------------------------------------- stat tiles */
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 10px;
+    margin-block-end: 14px;
+  }
+
+  .stat {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 11px 13px;
+    background: var(--surface-subtle);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+  }
+
+  .stat-label {
+    font-size: 12px;
+    letter-spacing: 0.01em;
+    color: var(--text);
+    opacity: 0.9;
+  }
+
+  .stat-value {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-h);
+    overflow-wrap: anywhere;
+  }
+
+  .stat-value.ok {
+    color: var(--ok);
+  }
+
+  .stat-value.off {
+    color: var(--text);
+  }
+
+  /* --------------------------------------------------------------- login */
+  .login-wrap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 24px;
+    background:
+      radial-gradient(60rem 30rem at 15% -10%, var(--accent-bg), transparent 60%),
+      var(--bg-subtle);
+  }
+
+  .login-card {
+    inline-size: min(380px, 100%);
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 26px;
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-md);
+  }
+
+  .login-card h1 {
+    margin: 0;
+    font-size: 21px;
+    letter-spacing: -0.02em;
+    color: var(--text-h);
+  }
+
+  .login-card p {
+    margin: 0;
+  }
+
+  .page-loading {
+    padding: 48px;
+    text-align: center;
+    color: var(--text);
+  }
+
+  pre.raw {
+    max-height: 420px;
+    overflow: auto;
+    margin: 0;
+    padding: 12px 14px;
+    font-size: 12px;
+    line-height: 1.55;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+  }
+
+  details {
+    margin-block-start: 10px;
+  }
+
+  details summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-block-size: 24px;
+    margin-block-end: 8px;
+    font-size: 13.5px;
+    color: var(--accent);
+    cursor: pointer;
+  }
+
+  details summary:hover {
+    color: var(--accent-hover);
+  }
+
+  /* ------------------------------------------------------------ responsive */
+  @media (max-width: 900px) {
+    .app-shell {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .sidebar {
+      position: static;
+      height: auto;
+      padding: 14px 16px;
+      border-inline-end: none;
+      border-block-end: 1px solid var(--border);
+    }
+
+    .sidebar nav {
+      flex-direction: row;
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+
+    .nav-item {
+      min-block-size: 36px;
+      padding: 6px 10px;
+    }
+
+    .nav-item.active::before {
+      display: none;
+    }
+
+    .sidebar-footer {
+      margin-block-start: 0;
+      padding-block-start: 10px;
+    }
+
+    .content {
+      padding: 18px 16px 56px;
+    }
+
+    .split > .card,
+    .split > .card.grow {
+      flex: 1 1 100%;
+    }
+
+    .toast-region {
+      inset-block-end: 12px;
+      inset-inline: 12px;
+      inline-size: auto;
+    }
+  }
+
+  @media (pointer: coarse) {
+    button,
+    input,
+    select,
+    textarea {
+      min-block-size: 44px;
+    }
+
+    button.link {
+      min-block-size: 36px;
+    }
+  }
+}
+
+/* Entry animation for the freshly mounted toast. @starting-style must stay
+   top-level and unscoped — inside a layer or a nested selector it is ignored. */
+@starting-style {
+  .toast {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+/* --- Runtime log viewer ---------------------------------------------------- */
+
+.logs-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.logs-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.logs-live {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14.5px;
+  color: var(--text);
+}
+
+.logs-live input {
+  inline-size: 15px;
+  block-size: 15px;
+  accent-color: var(--accent);
+}
+
+.logs-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 14px;
+}
+
+.logs-filters label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13.5px;
+  color: var(--text);
+}
+
+.logs-filters select,
+.logs-filters input {
+  min-inline-size: 140px;
+}
+
+.logs-filters .logs-search input {
+  min-inline-size: 280px;
+}
+
+.logs-status {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.logs-follow-hint {
+  color: var(--warn);
+}
+
+/* The log pane is a terminal-style surface, matching pre.raw (the app's
+   other code/JSON surface): --code-bg adapts to both color schemes and
+   --radius-sm keeps the corner language consistent. */
+.logs-view {
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--code-bg);
+  block-size: min(52vh, 560px);
+  padding: 8px 0;
+}
+
+.logs-empty {
+  padding: 20px;
+}
+
+.logs-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 10px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.log-line {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+
+.log-line:hover {
+  /* Hover works on the code surface in both schemes; --surface-subtle is the
+     dark-mode-tuned sibling of --bg-subtle for inset surfaces. */
+  background: var(--surface-subtle);
+}
+
+.log-time {
+  flex: none;
+  color: var(--text);
+}
+
+.log-level {
+  flex: none;
+  inline-size: 5ch;
+  font-weight: 600;
+}
+
+.log-level.lv-debug {
+  color: var(--text);
+}
+
+.log-level.lv-info {
+  color: var(--info);
+}
+
+.log-level.lv-warn {
+  color: var(--warn);
+}
+
+.log-level.lv-error {
+  color: var(--danger);
+}
+
+.log-line.error .log-msg {
+  color: var(--danger);
+}
+
+.log-src {
+  flex: none;
+  inline-size: 7ch;
+  color: var(--text);
+}
+
+.log-msg {
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text-h);
+}
+
+.logs-files h2 {
+  font-size: 16px;
+}
+
+.logs-file-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}

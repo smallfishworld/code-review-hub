@@ -1,0 +1,8 @@
+# Normalize line endings across Linux / Windows / macOS contributors.
+* text=auto
+*.sh text eol=lf
+*.mjs text eol=lf
+*.ts text eol=lf
+*.png binary
+*.zip binary
+*.tar.gz binary
