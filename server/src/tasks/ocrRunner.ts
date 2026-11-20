@@ -50,6 +50,30 @@ export interface RepoAuthInfo {
   branch?: string;
 }
 
+/**
+ * Engine-boundary validation for admin-configured repo fields (policy:
+ * securityInvariants). URLs must carry a known VCS protocol and contain no
+ * control characters (argv is shell-free, but the boundary check keeps the
+ * taint chain observable and stops stray whitespace/NEWLINE tricks).
+ */
+const VCS_URL_RE = /^(?:file|http|https|svn|svn\+ssh|git|ssh):\/\/[\x21-\x7e]+$/;
+const SAFE_USERINFO_RE = /^[\x20-\x7e]{0,200}$/;
+
+function assertSafeRepoAuth(auth: RepoAuthInfo): RepoAuthInfo {
+  if (!VCS_URL_RE.test(auth.url)) {
+    throw new Error(`仓库地址协议或格式不受支持: ${auth.url.slice(0, 60)}`);
+  }
+  for (const [label, value] of [
+    ['username', auth.username],
+    ['branch', auth.branch],
+  ] as const) {
+    if (value !== undefined && !SAFE_USERINFO_RE.test(value)) {
+      throw new Error(`仓库${label}含非法字符`);
+    }
+  }
+  return auth;
+}
+
 function loadRepoAuth(
   db: Database.Database,
   credentials: CredentialService,
@@ -59,7 +83,7 @@ function loadRepoAuth(
     .prepare('SELECT * FROM repo WHERE id = ?')
     .get(repoId) as Record<string, unknown> | undefined;
   if (!row) throw new Error(`repo ${repoId} not found`);
-  return {
+  return assertSafeRepoAuth({
     type: row.type as 'svn' | 'git',
     url: row.url as string,
     username: (row.username as string | null) ?? undefined,
@@ -67,7 +91,7 @@ function loadRepoAuth(
       ? (credentials.reveal(row.credential_id as number) ?? undefined)
       : undefined,
     branch: (row.branch as string | null) ?? undefined,
-  };
+  });
 }
 
 /** Directory holding the cached working copy / clone for a repo. */

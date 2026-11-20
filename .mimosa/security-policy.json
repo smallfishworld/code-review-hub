@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "threatModel": {
+    "inherit": true,
+    "assets": [
+      "平台数据库（repo/task/report/memory/mcp_server/engine）与 DATA_DIR 下的工作副本、报告、密钥",
+      "credential 表中的 LLM / SVN / MCP 凭据（AES-256-GCM 加密，密钥文件与库成对）"
+    ],
+    "attackerControlledInputs": [
+      "受监控仓库的提交内容与元数据（作者 / 提交消息 / 变更路径 / 文件内容）",
+      "未认证 HTTP 请求（由管理员口令门禁保护：bcrypt + 会话 token）"
+    ],
+    "trustBoundaries": [
+      "Web 控制台：所有 /api/* 需要管理员登录；管理员是受信操作者，其配置的仓库地址 / LLM 端点 / MCP 目标即平台要代表其执行的对象",
+      "ocr 子进程：按仓库隔离 HOME（ocr-home/<repo-id>/），POSIX 无 shell spawn，动态 CLI 参数先经 validatedNode 白名单（SVN 版本号 /^\\d+$/、Git sha /^[0-9a-f]{4,40}$/i）",
+      "MCP 服务器：以平台服务账号权限运行，仅管理员可注册，控制台明示任意命令执行风险"
+    ],
+    "securityInvariants": [
+      "所有 SQL 使用静态语句 + 占位符绑定参数，禁止字符串拼接 SQL",
+      "子进程一律无 shell spawn（POSIX）；Windows .cmd shim 例外且 argv 为静态 flag + 校验值（forbidShell=false 仅指平台合法需要启动子进程，shell 使用本身仍被禁止）",
+      "task.node 在进入任何 argv 前必须通过 validatedNode()（数字 / hex 白名单，拒绝 '-' 开头）",
+      "凭据只从 credential 表读取；HTTP 响应中凭据值必须脱敏（********）",
+      "评审报告按 suppression 指纹确定性抑制，只标记不删除，报告详情可审计"
+    ],
+    "exclusions": [
+      "管理员配置的 repo URL / LLM apiBase / MCP command|url 属于受信管理输入（平台核心功能即代表管理员对这些目标执行 svn/git/ocr 与 fetch）；格式校验在保存时与引擎边界执行（协议白名单 + validatedNode），不按匿名用户 SSRF/注入模型告警",
+      "memory / mcp / engines 路由的 id 参数经 /^\\d{1,15}$/ 白名单 + Number.isSafeInteger 校验；SQL 全部为静态语句 + 绑定参数",
+      "测试代码（*.test.ts）中的 git/svn 调用均为 execFileSync 参数数组，操作自建临时仓库"
+    ]
+  },
+  "network": {
+    "allowedProtocols": [
+      "https:",
+      "http:"
+    ],
+    "allowedHosts": [],
+    "blockPrivateNetworks": false,
+    "maxRedirects": 0
+  },
+  "command": {
+    "forbidShell": false,
+    "allowedBinaries": [
+      "svn",
+      "svnadmin",
+      "git",
+      "ocr",
+      "taskkill",
+      "powershell",
+      "node",
+      "mv",
+      "npm"
+    ]
+  },
+  "path": {
+    "allowedWriteRoots": [],
+    "requireBasename": true
+  },
+  "data": {
+    "allowedSortFields": [],
+    "requireOwnerScope": false
+  }
+}

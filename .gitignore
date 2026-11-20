@@ -15,7 +15,10 @@ dist-win/
 .agents/
 dist-mac/
 
-# Local tool artifacts
+# Local tool artifacts (Mimosa policy file .mimosa/security-policy.json IS tracked;
+# only runtime state is ignored)
+.mimosa/hook-state/
+.mimosa/finding-ledger/
+.mimosa/hook-status/
 .codegraph/
-.mimosa/
 web/.mimosa/
