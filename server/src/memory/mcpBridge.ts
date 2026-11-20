@@ -312,59 +312,68 @@ export async function main(): Promise<void> {
   };
 
   let buffer = '';
+  // Serialize chunk processing: a slow tool call must never interleave with
+  // the next chunk's replies (JSON-RPC responses stay in request order).
+  let tail: Promise<void> = Promise.resolve();
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', (chunk: string) => {
-    void (async () => {
-      buffer += chunk;
-      for (;;) {
-        const idx = buffer.indexOf('\n');
-        if (idx === -1) break;
-        const line = buffer.slice(0, idx).trim();
-        buffer = buffer.slice(idx + 1);
-        if (!line) continue;
-        let msg: {
-          id?: unknown;
-          method?: string;
-          params?: { name?: string; arguments?: Record<string, unknown> };
-        };
-        try {
-          msg = JSON.parse(line);
-        } catch {
-          continue;
-        }
-        if (!msg || typeof msg !== 'object') continue;
-        if (msg.id === undefined || msg.id === null) continue; // notification
-        switch (msg.method) {
-          case 'initialize':
-            reply(msg.id, {
-              protocolVersion: '2024-11-05',
-              capabilities: { tools: {} },
-              serverInfo: { name: BUILTIN_MEMORY_QUERY, version: '1.0.0' },
-            });
-            break;
-          case 'tools/list':
-            reply(msg.id, { tools: TOOL_DEFS });
-            break;
-          case 'tools/call': {
-            const name = msg.params?.name ?? '';
-            const args = msg.params?.arguments ?? {};
-            try {
-              const text = await runTool(db, repoId, name, args);
-              reply(msg.id, { content: [{ type: 'text', text }], isError: false });
-            } catch (err) {
-              const text = `记忆查询失败: ${err instanceof Error ? err.message : String(err)}`;
-              reply(msg.id, { content: [{ type: 'text', text }], isError: false });
-            }
-            break;
+    tail = tail.then(() =>
+      (async () => {
+        buffer += chunk;
+        for (;;) {
+          const idx = buffer.indexOf('\n');
+          if (idx === -1) break;
+          const line = buffer.slice(0, idx).trim();
+          buffer = buffer.slice(idx + 1);
+          if (!line) continue;
+          let msg: {
+            id?: unknown;
+            method?: string;
+            params?: { name?: string; arguments?: Record<string, unknown> };
+          };
+          try {
+            msg = JSON.parse(line);
+          } catch {
+            continue;
           }
-          default:
-            replyError(msg.id, -32601, `method not found: ${msg.method ?? '(none)'}`);
+          if (!msg || typeof msg !== 'object') continue;
+          if (msg.id === undefined || msg.id === null) continue; // notification
+          switch (msg.method) {
+            case 'initialize':
+              reply(msg.id, {
+                protocolVersion: '2024-11-05',
+                capabilities: { tools: {} },
+                serverInfo: { name: BUILTIN_MEMORY_QUERY, version: '1.0.0' },
+              });
+              break;
+            case 'tools/list':
+              reply(msg.id, { tools: TOOL_DEFS });
+              break;
+            case 'tools/call': {
+              const name = msg.params?.name ?? '';
+              const args = msg.params?.arguments ?? {};
+              try {
+                const text = await runTool(db, repoId, name, args);
+                reply(msg.id, { content: [{ type: 'text', text }], isError: false });
+              } catch (err) {
+                const text = `记忆查询失败: ${err instanceof Error ? err.message : String(err)}`;
+                reply(msg.id, { content: [{ type: 'text', text }], isError: false });
+              }
+              break;
+            }
+            default:
+              replyError(msg.id, -32601, `method not found: ${msg.method ?? '(none)'}`);
+          }
         }
-      }
-    })();
+      })()
+    );
   });
-  process.stdin.on('end', () => {
+  const shutdown = (): void => {
     db.close();
     process.exit(0);
-  });
+  };
+  process.stdin.on('end', shutdown);
+  // A stdin error never fires 'end' — without this the bridge would hang
+  // forever holding its readonly connection.
+  process.stdin.on('error', shutdown);
 }

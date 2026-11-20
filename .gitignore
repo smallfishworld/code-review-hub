@@ -20,6 +20,7 @@ dist-mac/
 .mimosa/hook-state/
 .mimosa/finding-ledger/
 .mimosa/reports/
+.mimosa/history/
 .mimosa/hook-status/
 .codegraph/
 web/.mimosa/
