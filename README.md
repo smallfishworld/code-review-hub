@@ -1,7 +1,10 @@
 # codereview-hub（自动化代码评审平台）
 
-基于 [`ocr`](https://github.com/smallfishworld/open-code-review-svn)（open-code-review 的 SVN fork）构建的自动化代码评审平台：对 **SVN / Git** 仓库上库的每个节点（revision / commit）调用 `ocr` 做 AI 评审，支持手动触发单节点 / 区间评审、按人员与路径过滤的自动监控、评审报告浏览，以及邮件 / 聊天机器人通知。
+基于 [`ocr`](https://github.com/smallfishworld/open-code-review-svn)（open-code-review 的 SVN fork）构建的自动化代码评审平台：对 **SVN / Git** 仓库上库的每个节点（revision / commit）调用评审引擎做 AI 评审，支持手动触发单节点 / 区间评审、按人员与路径过滤的自动监控、评审报告浏览，以及邮件 / 聊天机器人通知。
 
+- **可插拔评审引擎**：统一的 `ReviewEngine` 适配器接口（ocr 为首个适配器），按 监控规则 → 仓库 → 全局默认 三级选择引擎
+- **MCP 服务器集成**：平台统一管理 MCP 服务器（stdio / http），评审时注入引擎配置，使评审智能体可调用 MCP 工具（如 codegraph 符号检索）；连通性测试与逐任务调用审计
+- **项目记忆**：按仓库沉淀六类记忆（架构 / 约定 / 坑点 / 误报抑制 / 历史修复 / 术语），评审前检索注入、评审后 LLM 蒸馏，误报反馈闭环让评审随使用越来越准
 - 单进程部署：HTTP API + Web 控制台 + 任务执行器 + 仓库轮询监控 + 通知发送器
 - 全部状态持久化（SQLite + 报告 JSON 文件），服务重启可恢复
 - 同一套代码运行在 **Linux**、**Windows** 与 **macOS**
@@ -13,7 +16,7 @@
 | 依赖 | 版本要求 | 说明 |
 | --- | --- | --- |
 | Node.js | >= 20（推荐 22 LTS） | 服务与前端构建 |
-| `ocr` | **>= 1.12.13**（推荐最新 `1.13.8-svn.1`） | 评审执行器；低于 1.12.13 的版本只支持 SVN 工作副本模式，无法按 `--commit <rev>` 评审单个 SVN 节点 |
+| `ocr` | **>= 1.12.13**（推荐最新 `1.13.8-svn.1`） | 评审执行器；低于 1.12.13 的版本只支持 SVN 工作副本模式；**< 1.13 时 MCP 注入与项目记忆注入自动降级跳过**（评审照常执行，任务记录标注降级原因） |
 | `svn` | **>= 1.9**（推荐 1.14.x） | 仅监控/评审 SVN 仓库时需要；`ocr` 用 `svn info --show-item` 探测工作副本 |
 | `git` | 任意较新版本（>= 2.20） | 仅监控/评审 Git 仓库时需要 |
 
@@ -28,7 +31,7 @@ ocr --version    # 期望输出 open-code-review v1.13.8-svn.1 ...
 
 `ocr` 自身需要 LLM 配置，两种方式任选其一：
 
-1. **推荐**：在平台 Web 控制台「LLM Provider」页配置 API 地址 / 模型 / Key 并设为默认。平台会为每次评审生成隔离的 `HOME`（`<DATA_DIR>/ocr-home/.opencodereview/config.json`），不受运行账号全局 `~/.opencodereview/config.json` 影响。
+1. **推荐**：在平台 Web 控制台「LLM Provider」页配置 API 地址 / 模型 / Key 并设为默认。平台会为每次评审生成按仓库隔离的 HOME（`<DATA_DIR>/ocr-home/<repo-id>/.opencodereview/config.json`），不受运行账号全局 `~/.opencodereview/config.json` 影响，跨仓库并发任务互不污染。
 2. 不配置 Provider 时，`ocr` 回退到运行账号自己的 `~/.opencodereview/config.json`。
 
 ### 安装 SVN（Windows）
@@ -139,11 +142,12 @@ node scripts/package-mac.mjs [--arch arm64|x64]
 
 ```
 data/
-├── app.db              # SQLite（仓库/任务/报告索引/监控/通知）
+├── app.db              # SQLite（仓库/任务/报告索引/监控/通知/引擎/MCP/记忆）
 ├── keys/secret.key     # AES-256-GCM 密钥文件（首次启动生成，POSIX 权限 0600）
 ├── reports/<task>.json # ocr 输出的评审原文
 ├── workcopies/<repo>/  # 每仓库的 SVN 工作副本 / Git 克隆缓存
-└── ocr-home/           # 平台生成的隔离 ocr 配置
+├── memory/<repo-id>/   # 项目记忆 markdown 投影（SQLite 为准，可手工编辑后重载）
+└── ocr-home/<repo-id>/ # 每仓库隔离的 ocr 配置 HOME（LLM Provider + MCP 注入）
 ```
 
 备份时整体复制 `DATA_DIR` 即可（`keys/secret.key` 与 `app.db` 必须成对保留，否则已存凭据无法解密）。
@@ -157,9 +161,12 @@ data/
 3. 登录后按顺序配置：
    - **仓库管理**：新增 SVN 或 Git 仓库（保存前会做连通性验证：`svn info` / `git ls-remote`，失败不保存）。
    - **LLM Provider**：API 地址 / 模型 / 协议 / Key，设为默认；可点「测试连接」。
+   - **评审引擎**：首次启动自动注册默认 ocr 引擎并设为全局默认；可按需新增引擎、按仓库 / 监控规则覆盖（详见第 6 节）。
+   - **MCP 服务器**（可选）：注册 codegraph 等 MCP 服务器并绑定仓库，评审时自动注入（详见第 6 节）。
    - **通知配置**：邮件渠道、聊天机器人渠道，选择触发规则（全部完成 / 仅失败 / 仅成功）。
    - **监控规则**：轮询间隔（>= 30 秒）、人员白名单、路径前缀、回溯节点数，启用后开始轮询。
-   - **手动触发 / 任务列表**：单节点或区间触发，查看任务状态与报告。
+   - **手动触发 / 任务列表**：单节点或区间触发，查看任务状态与报告；报告 issue 行尾可标记「误报 / 已修复」喂给项目记忆。
+   - **项目记忆**（可选）：仓库详情行点「项目记忆」进入管理页，可手工维护条目、生成项目画像、预览注入内容（详见第 6 节）。
 
 ### 3.1 登录与鉴权扩展点
 
@@ -227,7 +234,45 @@ data/
 
 ---
 
-## 6. 跨平台冒烟验证
+## 6. 评审引擎、MCP 服务器与项目记忆
+
+### 6.1 评审引擎（可插拔）
+
+- 首次启动自动注册一个默认 **ocr** 引擎并设为全局默认；「评审引擎」页可新增 / 启停 / 设默认 / 查看能力声明（支持的 VCS、MCP 接入方式、记忆注入方式等）。当前版本仅内置 ocr 适配器，claude-code / codex 等适配器为后续规划。
+- **三级选择**：任务的引擎按 监控规则级 → 仓库级 → 全局默认 解析；解析失败（引擎被删除或停用）任务**直接失败并写明原因，不静默回退**。被历史任务引用的引擎只能停用、不能删除。
+- **版本门控**：每次评审前探测 `ocr --version`，低于 **1.13** 的运行时自动跳过 MCP 注入与记忆注入（评审照常执行，任务详情标注降级原因）。
+- **隔离模型**：ocr 的 HOME 按仓库隔离（`ocr-home/<repo-id>/`），同仓库任务串行复用，跨仓库并发任务互不影响——这保证 MCP 注入与 SVN 凭据种子不会串仓库。
+
+### 6.2 MCP 服务器
+
+平台统一管理 MCP 服务器并在评审时注入引擎配置，让评审智能体可以调用 MCP 工具加速上下文获取（典型用途：[codegraph](https://github.com/codegraph) 符号检索）。
+
+- **配置方式**（「MCP 服务器」页）：填写名称、传输类型与连接配置——
+  - `stdio`：启动命令 + 参数（空格分隔）+ 可选环境变量（JSON），例如 `codegraph` + `serve --mcp`；
+  - `http`：URL + 可选请求头（JSON，可放鉴权 token）。
+- **作用域**：全局（所有仓库生效）或绑定单个仓库；评审时收集「全局启用 + 本仓库绑定启用」一并注入。
+- **工具白名单**（可选）：ocr 引擎不支持按工具过滤，白名单会以「未强制执行」标注在任务审计中（引擎支持时会强制）。
+- **连通性测试**：页内一键测试，stdio 完成 MCP initialize 握手并枚举 tools/list；http 按 Streamable HTTP 语义调用。测试展示工具清单，不改注册表。
+- **审计**：每次评审的任务详情展示注入了哪些服务器、白名单是否强制、引擎上报的工具调用统计（引擎未上报时显式标注）。
+- **脱敏**：headers / env 中的鉴权值在列表与详情接口回显为 `********`，完整值仅用于注入与测试。
+- **⚠️ 风险提示**：MCP 服务器以平台服务账号的权限执行任意命令（stdio）或访问网络地址（http），**仅应添加可信来源的 MCP**；配置接口仅管理员可用。
+
+### 6.3 项目记忆
+
+按仓库沉淀可复用的评审知识，让同一工程的评审随使用次数增多而更准、更快。
+
+- **六类记忆**：architecture（架构）/ convention（约定）/ pitfall（坑点）/ suppression（误报抑制）/ history（历史修复）/ glossary（术语）。
+- **双存储**：SQLite（含 FTS5 trigram 全文索引，支持中文检索）为准；`data/memory/<repo-id>/` 下按类型组织的 markdown 为投影，可手工编辑后点「重载 markdown」生效。
+- **评审前注入**：平台采集本次变更文件（svn / git diff），按作用范围前缀 + 全文检索召回，按 置信度 × 时间新近度 × 命中次数 排序，截断至 1500 token 预算，经 ocr `--requirement`（业务背景参数）注入；命中条目与计数在任务详情可见。仓库无记忆或引擎不支持时评审照常执行。
+- **反馈闭环**：报告 issue 行尾「误报 / 已修复」——误报按指纹（文件前缀 + 类型 + 描述归一化）聚合进 suppression 记忆，同一模式每累计 3 次确认置信度 +0.1；已修复生成 history 记忆。
+- **确定性抑制**：报告入库前按 suppression 指纹过滤，命中的 issue 默认不展示于报告与通知（报告详情可展开审计），不依赖引擎是否遵从注入提示。
+- **评审后蒸馏**：评审成功后异步调用 LLM 提炼候选记忆（每次至多 5 条，与既有条目按标题归一化合并），失败仅记日志、不影响任务。
+- **演化治理**：90 天未命中且低置信度的条目自动归档；每完成 20 次评审合并重复条目；「生成项目画像」按钮可对新仓库冷启动（扫描工作副本产出架构 / 约定基础记忆，可重复执行为更新）。
+- **降级**：环境缺少 FTS5 / trigram 时全文检索自动降级为 LIKE（记忆页有提示）；置信度 < 0.3 的条目不参与召回。
+
+---
+
+## 7. 跨平台冒烟验证
 
 `scripts/smoke.mjs` 会自建临时 SVN / Git 仓库、本地 webhook 接收器与本地 SMTP stub，驱动一个运行中的平台实例走完整流程（10 个阶段、43 项检查）：
 
@@ -290,7 +335,7 @@ node scripts/smoke.mjs
 
 ---
 
-## 7. 开发
+## 8. 开发
 
 ```bash
 npm run dev        # 并行启动后端（tsx watch :3000）与前端（Vite :5173，/api 代理到 3000）
@@ -303,30 +348,39 @@ npm run build      # 构建服务端与前端
 
 ```
 server/src/
-├── index.ts            # 启动：依赖检测 → DB → 队列 → 路由 → 静态 SPA
+├── index.ts            # 启动：依赖检测 → DB → 引擎引导 → 队列 → 路由 → 静态 SPA
 ├── auth/               # 管理员口令鉴权（可替换接口层）
 ├── crypto/             # AES-256-GCM 凭据加密
-├── db/                 # SQLite 迁移
+├── db/                 # SQLite 迁移（v9：引擎/MCP/记忆）
 ├── deps/               # svn/git/ocr 探测与版本校验
+├── engines/            # 可插拔评审引擎：类型、ocr 适配器、注册表、三级选择、任务执行器
+├── mcp/                # MCP 注册表、注入器、连通性测试（stdio/http）
+├── memory/             # 项目记忆：存储/检索/注入/反馈/蒸馏/演化/确定性抑制
 ├── monitor/            # 轮询、过滤、监控状态
 ├── notifications/      # 渠道配置、邮件/聊天适配器、发送器
 ├── providers/          # LLM Provider 配置与 ocr 隔离 HOME
 ├── repos/              # 仓库 CRUD 与连通性验证
-├── tasks/              # 任务队列、ocr 调用器、报告解析、手动触发
+├── tasks/              # 任务队列、ocr 进程管道、报告解析（含抑制）、手动触发
 └── vcs/                # svn / git 命令封装
-web/src/pages/          # 仓库 / 监控 / 触发 / 任务 / Provider / 通知 / 设置
+web/src/pages/          # 仓库 / 监控 / 触发 / 任务 / Provider / 引擎 / MCP / 记忆 / 通知 / 设置
 scripts/smoke.mjs       # 跨平台端到端冒烟
+openspec/               # 规格驱动开发：specs/ 主规格 + changes/ 历史变更
 ```
 
 ---
 
-## 8. 常见问题
+## 9. 常见问题
 
 | 现象 | 处理 |
 | --- | --- |
 | 启动日志显示 `ocr [MISSING]` | `npm i -g @smallfishworld/open-code-review-svn@1.13.8-svn.1`，确认 `ocr --version` 可用 |
 | 启动日志显示 `ocr [BROKEN] 版本过低` | 升级到 >= 1.12.13 |
+| 任务详情显示引擎降级（跳过 MCP / 记忆注入） | ocr < 1.13，升级后自动恢复注入 |
 | `svn [BROKEN]` 或评审报 "is not a git repository or SVN working copy" | `svn --version` 需 >= 1.9（`--show-item` 支持）；Windows 上确认 PATH 中的 svn 不是 TortoiseSVN 的旧版本 |
 | 任务失败且错误含 `LLM completion error` | Provider 地址 / Key / 模型不可用；在「LLM Provider」页点「测试连接」，或检查网络 |
+| 任务失败且错误含「引擎 … 已停用 / 不存在」 | 「评审引擎」页恢复该引擎或调整 仓库 / 规则级引擎绑定；平台不静默回退到其他引擎 |
+| MCP「连通性测试」报启动失败 / 超时 / 协议错误 | 启动失败：确认命令在本机可执行且参数正确；超时：调大该服务器的超时秒数；协议错误：确认目标是 MCP stdio 服务器（如 `codegraph serve --mcp`） |
+| 任务详情 MCP 统计显示「引擎未上报工具统计」 | 当前 ocr 版本的 JSON 输出不含工具调用统计，属预期；注入清单仍然可查 |
+| 项目记忆页提示 FTS 不可用 | 当前 better-sqlite3 环境缺少 FTS5/trigram，检索已降级为 LIKE（功能可用，仅召回质量略降） |
 | 通知日志显示 `failed` | 查看日志中的原因（SMTP 认证失败、webhook 返回 HTTP 4xx/5xx 等）；用「发送测试」复现 |
 | 重启后需重新登录 | 会话保存在内存中，属预期行为 |
