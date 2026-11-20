@@ -242,7 +242,21 @@ export class ReportService {
             `INSERT INTO report_issue (report_id, file, line, end_line, severity, category, description, suggestion)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
           );
+        // Engines occasionally emit the same finding twice (observed: ocr's
+        // double agent pass records one code_comment per pass). Report views
+        // must not show duplicates: identical (file, line, category,
+        // normalized description) is collapsed to the first occurrence.
+        const seen = new Set<string>();
+        let inserted = 0;
         for (const c of comments) {
+          const key = [
+            (c.path ?? '').replace(/\\/g, '/').trim().toLowerCase(),
+            c.startLine ?? c.endLine ?? null,
+            (c.category ?? '').trim().toLowerCase(),
+            (c.content ?? '').replace(/\s+/g, ' ').trim().toLowerCase(),
+          ].join('|');
+          if (seen.has(key)) continue;
+          seen.add(key);
           insertIssue.run(
             reportId,
             c.path ?? null,
@@ -253,6 +267,12 @@ export class ReportService {
             c.content ?? '',
             c.suggestion ?? null
           );
+          inserted++;
+        }
+        if (inserted !== comments.length) {
+          this.db
+            .prepare('UPDATE report SET issue_count = ? WHERE id = ?')
+            .run(inserted, reportId);
         }
       }
     });

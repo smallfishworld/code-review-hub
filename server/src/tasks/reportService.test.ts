@@ -153,6 +153,26 @@ describe('ReportService persistence', () => {
     expect(detail!.raw).toBe(REAL_SVN_SAMPLE);
   });
 
+  it('collapses duplicate findings from double agent passes to one issue', () => {
+    const taskId = seedTask(db);
+    const rawPath = join(dir, 'reports', `${taskId}.json`);
+    mkdirSync(join(dir, 'reports'), { recursive: true });
+    // 观测到的真实形态：ocr 双 pass 对同一文件各 code_comment 一次，两条完全相同
+    const raw = `{
+      "status": "success",
+      "summary": {"files_reviewed": 1, "comments": 2},
+      "comments": [
+        {"path": "trunk/src/app.ts", "content": "静默忽略异常", "start_line": 7, "end_line": 12, "category": "bug", "severity": "high"},
+        {"path": "trunk/src/app.ts", "content": "静默忽略异常", "start_line": 7, "end_line": 12, "category": "bug", "severity": "high"}
+      ]
+    }`;
+    writeFileSync(rawPath, raw);
+    const svc = new ReportService(db);
+    const stored = svc.indexTaskReport(taskId, rawPath)!;
+    expect(stored.issueCount).toBe(1);
+    expect(svc.issues(taskId)).toHaveLength(1);
+  });
+
   it('marks succeeded-but-raw when JSON is invalid, keeps raw text', () => {
     const taskId = seedTask(db);
     const rawPath = join(dir, 'reports', `${taskId}.json`);
