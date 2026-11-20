@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { openDatabase } from '../db/database.js';
 import { SecretStore } from '../crypto/secrets.js';
 import { CredentialService } from '../crypto/credentialService.js';
@@ -83,7 +83,7 @@ exit 0
 }
 
 function seedGitRepo(db: Database.Database): number {
-  execSync(`git init -b main ${JSON.stringify(join(dir, 'origin.git'))}`);
+  execFileSync('git', ['init', '-b', 'main', join(dir, 'origin.git')]);
   const info = db
     .prepare("INSERT INTO repo (type, name, url, branch) VALUES ('git', 'g1', ?, 'main')")
     .run(join(dir, 'origin.git'));
@@ -106,13 +106,15 @@ function makeRunnerQueue(
 
 describe('OcrRunner + TaskQueue integration (fake ocr)', () => {
   it('succeeds: prepares git clone, runs ocr, writes report file', async () => {
-    execSync(`git init -b main ${JSON.stringify(join(dir, 'origin.git'))}`);
+    execFileSync('git', ['init', '-b', 'main', join(dir, 'origin.git')]);
     // create a real commit so checkout has something
     const origin = join(dir, 'origin.git');
-    execSync('git config user.email t@t && git config user.name t', { cwd: origin });
+    execFileSync('git', ['config', 'user.email', 't@t'], { cwd: origin });
+    execFileSync('git', ['config', 'user.name', 't'], { cwd: origin });
     writeFileSync(join(origin, 'a.txt'), 'hello');
-    execSync('git add . && git commit -m first', { cwd: origin });
-    const sha = execSync('git rev-parse HEAD', { cwd: origin }).toString().trim();
+    execFileSync('git', ['add', '.'], { cwd: origin });
+    execFileSync('git', ['commit', '-m', 'first'], { cwd: origin });
+    const sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: origin, encoding: 'utf8' }).toString().trim();
 
     const info = db
       .prepare("INSERT INTO repo (type, name, url, branch) VALUES ('git', 'g1', ?, 'main')")
@@ -147,11 +149,13 @@ describe('OcrRunner + TaskQueue integration (fake ocr)', () => {
 
   it('cancel kills a slow ocr child and marks the task cancelled', async () => {
     const origin = join(dir, 'origin.git');
-    execSync(`git init -b main ${JSON.stringify(origin)}`);
-    execSync('git config user.email t@t && git config user.name t', { cwd: origin });
+    execFileSync('git', ['init', '-b', 'main', origin]);
+    execFileSync('git', ['config', 'user.email', 't@t'], { cwd: origin });
+    execFileSync('git', ['config', 'user.name', 't'], { cwd: origin });
     writeFileSync(join(origin, 'a.txt'), 'hi');
-    execSync('git add . && git commit -m c', { cwd: origin });
-    const sha = execSync('git rev-parse HEAD', { cwd: origin }).toString().trim();
+    execFileSync('git', ['add', '.'], { cwd: origin });
+    execFileSync('git', ['commit', '-m', 'c'], { cwd: origin });
+    const sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: origin, encoding: 'utf8' }).toString().trim();
     const info = db
       .prepare("INSERT INTO repo (type, name, url, branch) VALUES ('git', 'g1', ?, 'main')")
       .run(origin);
@@ -184,11 +188,13 @@ describe('OcrRunner + TaskQueue integration (fake ocr)', () => {
 
   it('streams ocr stdout/stderr into the runtime LogService', async () => {
     const origin = join(dir, 'origin.git');
-    execSync(`git init -b main ${JSON.stringify(origin)}`);
-    execSync('git config user.email t@t && git config user.name t', { cwd: origin });
+    execFileSync('git', ['init', '-b', 'main', origin]);
+    execFileSync('git', ['config', 'user.email', 't@t'], { cwd: origin });
+    execFileSync('git', ['config', 'user.name', 't'], { cwd: origin });
     writeFileSync(join(origin, 'a.txt'), 'hi');
-    execSync('git add . && git commit -m c', { cwd: origin });
-    const sha = execSync('git rev-parse HEAD', { cwd: origin }).toString().trim();
+    execFileSync('git', ['add', '.'], { cwd: origin });
+    execFileSync('git', ['commit', '-m', 'c'], { cwd: origin });
+    const sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: origin, encoding: 'utf8' }).toString().trim();
     const info = db
       .prepare("INSERT INTO repo (type, name, url, branch) VALUES ('git', 'g1', ?, 'main')")
       .run(origin);
@@ -229,11 +235,13 @@ process.exit(1);`
 
   it('prep phase and ocr spawn are visible in the runtime log', async () => {
     const origin = join(dir, 'origin.git');
-    execSync(`git init -b main ${JSON.stringify(origin)}`);
-    execSync('git config user.email t@t && git config user.name t', { cwd: origin });
+    execFileSync('git', ['init', '-b', 'main', origin]);
+    execFileSync('git', ['config', 'user.email', 't@t'], { cwd: origin });
+    execFileSync('git', ['config', 'user.name', 't'], { cwd: origin });
     writeFileSync(join(origin, 'a.txt'), 'hi');
-    execSync('git add . && git commit -m c', { cwd: origin });
-    const sha = execSync('git rev-parse HEAD', { cwd: origin }).toString().trim();
+    execFileSync('git', ['add', '.'], { cwd: origin });
+    execFileSync('git', ['commit', '-m', 'c'], { cwd: origin });
+    const sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: origin, encoding: 'utf8' }).toString().trim();
     const info = db
       .prepare("INSERT INTO repo (type, name, url, branch) VALUES ('git', 'g1', ?, 'main')")
       .run(origin);

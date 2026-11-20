@@ -5,11 +5,15 @@ import { SecretStore } from './crypto/secrets.js';
 import { CredentialService } from './crypto/credentialService.js';
 import { buildRepoRoutes } from './repos/repoRoutes.js';
 import { TaskQueue } from './tasks/taskQueue.js';
-import { OcrRunner } from './tasks/ocrRunner.js';
 import { ReportService } from './tasks/reportService.js';
 import { TaskEventHub } from './tasks/taskEvents.js';
 import { buildTaskRoutes } from './tasks/taskRoutes.js';
 import { WorkspaceInitService } from './tasks/workspaceInit.js';
+import { EngineExecutor } from './engines/executor.js';
+import { bootstrapEngines } from './engines/registry.js';
+import { buildEngineRoutes } from './engines/routes.js';
+import { buildMcpRoutes } from './mcp/routes.js';
+import { buildMemoryRoutes } from './memory/routes.js';
 import { MonitorService } from './monitor/monitorService.js';
 import { buildMonitorRoutes } from './monitor/monitorRoutes.js';
 import { buildProviderRoutes } from './providers/providerRoutes.js';
@@ -73,11 +77,12 @@ async function main() {
   // --- core services -------------------------------------------------------
   const db = openDatabase({ dataDir });
   const credentials = new CredentialService(db, new SecretStore(join(dataDir, 'keys')));
-  const runner = new OcrRunner(db, credentials, { dataDir, logs });
-  const queue = new TaskQueue(db, runner.executor, 2, logs);
+  bootstrapEngines(db); // 幂等：空库插入默认 ocr 引擎并设为全局默认
+  const engineExecutor = new EngineExecutor(db, credentials, { dataDir, logs });
+  const queue = new TaskQueue(db, engineExecutor.execute, 2, logs);
 
   const reports = new ReportService(db);
-  const events = new TaskEventHub(db, queue, reports, dataDir);
+  const events = new TaskEventHub(db, queue, reports, dataDir, credentials);
   events.start();
 
   const monitor = new MonitorService(db, credentials, queue, { dataDir, logs });
@@ -100,6 +105,9 @@ async function main() {
   buildMonitorRoutes(db, monitor).register(app);
   buildLogRoutes(logs).register(app);
   buildProviderRoutes(db, credentials).register(app);
+  buildEngineRoutes(db, credentials, { dataDir }).register(app);
+  buildMcpRoutes(db).register(app);
+  buildMemoryRoutes(db, credentials, dataDir).register(app);
   const notifications = buildNotificationRoutes(db, credentials, {
     reports,
     senderOptions: { baseUrl: process.env.PUBLIC_BASE_URL ?? `http://localhost:${port}` },

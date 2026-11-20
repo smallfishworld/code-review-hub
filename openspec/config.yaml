@@ -1,5 +1,10 @@
 schema: spec-driven
 
+context: |
+  平台需同时支持 Windows、macOS、Linux：涉及进程 spawn、进程树终止、HOME/APPDATA 语义、路径分隔的设计与任务必须显式覆盖三平台差异
+  openspec 产物（proposal/design/tasks/spec）以中文撰写
+  不轻易引入新的运行时依赖，优先使用现有依赖能力（如 better-sqlite3 内置 FTS5）
+
 # Project context (optional)
 # Add only constraints that should guide OpenSpec artifacts and workflows.
 # Include constraints an agent cannot infer by reading the code.

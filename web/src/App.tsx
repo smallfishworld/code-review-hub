@@ -10,6 +10,9 @@ import { MonitorPage } from './pages/MonitorPage';
 import { TriggerPage } from './pages/TriggerPage';
 import { TasksPage, TaskDetailPage } from './pages/TasksPage';
 import { ProvidersPage } from './pages/ProvidersPage';
+import { EnginesPage } from './pages/EnginesPage';
+import { McpServersPage } from './pages/McpServersPage';
+import { RepoMemoryPage } from './pages/RepoMemoryPage';
 import { NotificationsPage } from './pages/NotificationsPage';
 import { LogsPage } from './pages/LogsPage';
 import { SettingsPage } from './pages/SettingsPage';
@@ -37,6 +40,9 @@ export default function App() {
                 <Route path="/tasks" element={<TasksPage />} />
                 <Route path="/tasks/:id" element={<TaskDetailPage />} />
                 <Route path="/providers" element={<ProvidersPage />} />
+                <Route path="/engines" element={<EnginesPage />} />
+                <Route path="/mcp" element={<McpServersPage />} />
+                <Route path="/repos/:id/memory" element={<RepoMemoryPage />} />
                 <Route path="/notifications" element={<NotificationsPage />} />
                 <Route path="/logs" element={<LogsPage />} />
                 <Route path="/settings" element={<SettingsPage />} />

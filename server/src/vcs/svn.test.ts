@@ -118,26 +118,26 @@ describe('svnLog', () => {
       const { mkdtempSync, rmSync, mkdirSync, writeFileSync } = await import('node:fs');
       const { tmpdir } = await import('node:os');
       const { join } = await import('node:path');
-      const { execSync } = await import('node:child_process');
+      const { execFileSync } = await import('node:child_process');
       const dir = mkdtempSync(join(tmpdir(), 'crp-svnlog-'));
       try {
         const repoDir = join(dir, 'repo');
         const wc = join(dir, 'wc');
-        execSync(`svnadmin create ${JSON.stringify(repoDir)}`);
-        execSync(`svn checkout -q ${JSON.stringify(`file:///${repoDir.replace(/\\/g, '/')}`)} ${JSON.stringify(wc)}`);
+        execFileSync('svnadmin', ['create', repoDir]);
+        execFileSync('svn', ['checkout', '-q', `file:///${repoDir.replace(/\\/g, '/')}`, wc]);
         mkdirSync(join(wc, 'sub'), { recursive: true });
         writeFileSync(join(wc, 'root.txt'), 'root');
-        execSync('svn add -q root.txt sub', { cwd: wc });
-        execSync('svn commit -q -m "r1 init" ', { cwd: wc });
+        execFileSync('svn', ['add', '-q', 'root.txt', 'sub'], { cwd: wc });
+        execFileSync('svn', ['commit', '-q', '-m', 'r1 init'], { cwd: wc });
         for (let i = 0; i < 4; i++) {
           writeFileSync(join(wc, 'sub', `f${i}.txt`), `content ${i}`);
-          execSync(`svn add -q sub/f${i}.txt`, { cwd: wc });
-          execSync(`svn commit -q -m "sub commit ${i}"`, { cwd: wc });
+          execFileSync('svn', ['add', '-q', `sub/f${i}.txt`], { cwd: wc });
+          execFileSync('svn', ['commit', '-q', '-m', `sub commit ${i}`], { cwd: wc });
         }
         for (let i = 0; i < 30; i++) {
           writeFileSync(join(wc, `root${i}.txt`), `content ${i}`);
-          execSync(`svn add -q root${i}.txt`, { cwd: wc });
-          execSync(`svn commit -q -m "root commit ${i}"`, { cwd: wc });
+          execFileSync('svn', ['add', '-q', `root${i}.txt`], { cwd: wc });
+          execFileSync('svn', ['commit', '-q', '-m', `root commit ${i}`], { cwd: wc });
         }
 
         const subUrl = `file:///${repoDir.replace(/\\/g, '/')}/sub`;
@@ -160,26 +160,26 @@ describe('svnLog', () => {
     const { mkdtempSync, rmSync, mkdirSync, writeFileSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
-    const { execSync } = await import('node:child_process');
+    const { execFileSync } = await import('node:child_process');
     const dir = mkdtempSync(join(tmpdir(), 'crp-svnpage-'));
     try {
       const repoDir = join(dir, 'repo');
       const wc = join(dir, 'wc');
-      execSync(`svnadmin create ${JSON.stringify(repoDir)}`);
-      execSync(`svn checkout -q ${JSON.stringify(`file:///${repoDir.replace(/\\/g, '/')}`)} ${JSON.stringify(wc)}`);
+      execFileSync('svnadmin', ['create', repoDir]);
+      execFileSync('svn', ['checkout', '-q', `file:///${repoDir.replace(/\\/g, '/')}`, wc]);
       mkdirSync(join(wc, 'sub'), { recursive: true });
       writeFileSync(join(wc, 'root.txt'), 'root');
-      execSync('svn add -q root.txt sub', { cwd: wc });
-      execSync('svn commit -q -m "r1 init"', { cwd: wc });
+      execFileSync('svn', ['add', '-q', 'root.txt', 'sub'], { cwd: wc });
+      execFileSync('svn', ['commit', '-q', '-m', 'r1 init'], { cwd: wc });
       for (let i = 1; i <= 6; i++) {
         writeFileSync(join(wc, 'sub', `f${i}.txt`), `content ${i}`);
-        execSync(`svn add -q sub/f${i}.txt`, { cwd: wc });
-        execSync(`svn commit -q -m "sub commit ${i}"`, { cwd: wc });
+        execFileSync('svn', ['add', '-q', `sub/f${i}.txt`], { cwd: wc });
+        execFileSync('svn', ['commit', '-q', '-m', `sub commit ${i}`], { cwd: wc });
       }
       for (let i = 1; i <= 20; i++) {
         writeFileSync(join(wc, `root${i}.txt`), `content ${i}`);
-        execSync(`svn add -q root${i}.txt`, { cwd: wc });
-        execSync(`svn commit -q -m "root commit ${i}"`, { cwd: wc });
+        execFileSync('svn', ['add', '-q', `root${i}.txt`], { cwd: wc });
+        execFileSync('svn', ['commit', '-q', '-m', `root commit ${i}`], { cwd: wc });
       }
 
       const subUrl = `file:///${repoDir.replace(/\\/g, '/')}/sub`;

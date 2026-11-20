@@ -7,6 +7,8 @@ const NAV = [
   { to: '/tasks', label: '任务与报告' },
   { to: '/trigger', label: '手动触发' },
   { to: '/providers', label: 'LLM Provider' },
+  { to: '/engines', label: '评审引擎' },
+  { to: '/mcp', label: 'MCP 服务器' },
   { to: '/notifications', label: '通知配置' },
   { to: '/logs', label: '运行日志' },
   { to: '/settings', label: '系统设置' },

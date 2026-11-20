@@ -7,9 +7,9 @@
 ## What Changes
 
 - **可插拔评审引擎**：新增 `ReviewEngine` 适配器接口（能力声明：支持的 VCS、revision 模式、全文件扫描、MCP 注入方式、记忆注入方式、resume、streaming），现有 ocr 调用逻辑迁移为 `OcrEngine` 适配器；任务队列按 `task.engine_id` 解析引擎，支持三级选择（全局默认 → 仓库级 → 规则级）；报告记录实际使用的引擎。
-- **MCP 服务器注册表**：平台统一管理 MCP 服务器（stdio/http 传输、command/args/env 或 url/headers、启停、作用域 global/repo、工具白名单、超时），评审时注入引擎配置（ocr 走隔离 HOME `config.json` 的 `mcp_servers.<name>` 字段，ocr ≥ 1.13 原生支持）；提供连通性测试（initialize → tools/list）与调用审计；仅管理员可配置。
-- **项目记忆**：按仓库维护六类记忆（architecture / convention / pitfall / suppression / history / glossary），markdown 文件为源（`<DATA_DIR>/memory/<repo-id>/`）+ SQLite `memory_entry` + FTS5 索引；评审后 LLM 蒸馏写入（每次限额 3–5 条、合并去重），评审前按变更文件 scope 匹配 + FTS 检索、置信度×时间×命中排序、1500 token 预算注入引擎（ocr 经 `--requirement`）；issue 级反馈闭环（误报 / 已修复按钮 → suppression / history 记忆）；置信度增减、90 天未命中衰减、每 20 次评审 compaction、冷启动项目画像生成。
-- **DB 迁移 v9**：新增 `engine`、`mcp_server`、`memory_entry`、`memory_injection`、`review_feedback` 表；`task` 增加 `engine_id`；`report` 增加 `engine`。
+- **MCP 服务器注册表**：平台统一管理 MCP 服务器（stdio/http 传输、command/args/env 或 url/headers、启停、作用域 global/repo、工具白名单、超时），评审时注入引擎配置（ocr 走按仓库隔离的 HOME `config.json` 的 `mcp_servers.<name>` 字段，ocr ≥ 1.13 原生支持、低版本运行时自动降级跳过注入）；提供连通性测试（stdio/http 均 initialize → tools/list）与调用审计（注入清单落库持久化，工具统计在引擎上报时采集、未上报显式标注）；工具白名单按引擎能力尽力强制、无法强制时显式标注；敏感配置值回显脱敏；仅管理员可配置。
+- **项目记忆**：按仓库维护六类记忆（architecture / convention / pitfall / suppression / history / glossary），SQLite `memory_entry` + FTS5（trigram，中日韩文本可用）索引为准、markdown 为投影（`<DATA_DIR>/memory/<repo-id>/`，支持人工编辑后重载）；平台自行采集变更文件列表（svn/git diff）作为检索输入，评审前按 scope 前缀 + FTS 检索、置信度×时间×命中排序、1500 token 预算（中英混合估算）注入引擎（ocr 经 `--requirement`）；评审后 LLM 蒸馏写入（每次限额 3–5 条、合并去重）；issue 级反馈闭环（误报 / 已修复按钮 → 按误报指纹聚合强化 suppression、生成 history 记忆）；报告入库前按 suppression 指纹做确定性抑制过滤（默认不展示、详情可审计，不依赖引擎遵从注入提示）；置信度增减、90 天未命中衰减、每 20 次评审 compaction、冷启动项目画像生成。
+- **DB 迁移 v9**：新增 `engine`、`mcp_server`、`memory_entry`（含误报指纹、人工确认计数）、`memory_injection`、`review_feedback`（关联记忆条目）、`task_mcp_injection`（MCP 审计落库）表；`task` 增加 `engine_id`；`report` 增加 `engine`；`report_issue` 增加可空 `end_line` 与抑制标记列。
 - **Web 控制台**：新增引擎管理页与 MCP 服务器页；仓库详情新增「项目记忆」tab；任务详情展示引擎、注入记忆条数、MCP 工具调用统计；报告 issue 增加误报 / 已修复反馈按钮。
 - 分期实施：P1（引擎抽象 + ocr 迁移 + MCP 注册表与注入）→ P2（记忆 v1：suppression + convention + 反馈闭环）；claude-code 等第二引擎适配器与蒸馏/衰减/compaction 属 P3/P4，不在本 change 内强制完成，但接口与表结构需一次性预留。
 
@@ -31,4 +31,4 @@
 - **API**：新增 `/api/engines`、`/api/mcp-servers`、`/api/repos/:id/memory`、`/api/tasks/:id/feedback` 等路由；现有路由行为不变。
 - **依赖**：无新增运行时依赖（FTS5 由 better-sqlite3 内置支持）。
 - **兼容**：现有任务 / 报告数据不受影响（迁移 v9 全部为新增表 + 可空列）；未配置引擎时行为等同现状（默认 ocr 引擎）。
-- **风险面**：MCP 服务器配置 = 任意命令执行，必须管理员权限 + 审计；记忆注入有 token 预算上限，防止 prompt 膨胀。
+- **风险面**：MCP 服务器配置 = 任意命令执行，必须管理员权限 + 审计，注入配置按仓库隔离防并发泄漏；记忆注入有 token 预算上限，防止 prompt 膨胀；确定性抑制只标记不删除，可回溯审计。

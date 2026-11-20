@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useId, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { api, type ReportDetail, type Task, type TaskList } from '../api/client';
+import {
+  api,
+  type ReportDetail,
+  type ReportIssue,
+  type Task,
+  type TaskList,
+  type TaskMcpAudit,
+  type TaskMemoryAudit,
+} from '../api/client';
 import { errorText, useApi, usePageTitle } from '../api/hooks';
 import { useFlash } from '../components/Toast';
 
@@ -224,8 +232,40 @@ export function TaskDetailPage() {
     () => api.get<ReportDetail>(`/api/tasks/${taskId}/report`).catch(() => null),
     [taskId]
   );
+  const mcpAudit = useApi(
+    () => api.get<TaskMcpAudit>(`/api/tasks/${taskId}/mcp`).catch(() => null),
+    [taskId]
+  );
+  const memoryAudit = useApi(
+    () => api.get<TaskMemoryAudit>(`/api/tasks/${taskId}/memory`).catch(() => null),
+    [taskId]
+  );
   const flash = useFlash();
   const [busy, setBusy] = useState(false);
+  const [feedbackDone, setFeedbackDone] = useState<Record<number, string>>({});
+
+  const sendFeedback = async (issue: ReportIssue, verdict: 'false_positive' | 'fixed') => {
+    const note = verdict === 'false_positive' ? window.prompt('误报原因（可选）：') ?? '' : '';
+    if (verdict === 'false_positive' && note === null) return;
+    setBusy(true);
+    try {
+      const res = await api.post<{ memoryAction: string }>(`/api/tasks/${taskId}/feedback`, {
+        issueId: issue.id,
+        verdict,
+        note: note || undefined,
+      });
+      setFeedbackDone((prev) => ({ ...prev, [issue.id]: verdict }));
+      flash.ok(
+        verdict === 'false_positive'
+          ? `已标记误报（${res.memoryAction === 'created' ? '新建' : res.memoryAction === 'reinforced' ? '强化' : '关联'}抑制记忆）`
+          : '已标记修复（生成历史记忆）'
+      );
+    } catch (err) {
+      flash.fail(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   // The page is the "查看进度" target after triggering a review, so it has to
   // follow the task on its own — otherwise it shows 执行中 forever until the
@@ -303,6 +343,16 @@ export function TaskDetailPage() {
               <span className="stat-value">{t.trigger === 'auto' ? '自动监控' : '手动'}</span>
             </div>
             <div className="stat">
+              <span className="stat-label">评审引擎</span>
+              <span className="stat-value">{report.data?.report.engine ?? 'ocr（历史）'}</span>
+            </div>
+            <div className="stat">
+              <span className="stat-label">注入记忆 / MCP</span>
+              <span className="stat-value small">
+                {memoryAudit.data?.count ?? 0} 条记忆 · {mcpAudit.data?.servers.length ?? 0} 个 MCP
+              </span>
+            </div>
+            <div className="stat">
               <span className="stat-label">开始 / 结束</span>
               <span className="stat-value small">
                 {formatTime(t.startedAt)} → {formatTime(t.finishedAt)}
@@ -337,6 +387,9 @@ export function TaskDetailPage() {
                     <th scope="col">级别</th>
                     <th scope="col">缺陷类型</th>
                     <th scope="col">问题描述与建议</th>
+                    <th scope="col" className="actions-cell">
+                      反馈
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -369,11 +422,49 @@ export function TaskDetailPage() {
                           </details>
                         )}
                       </td>
+                      <td className="actions-cell">
+                        <div className="row-actions">
+                          <button
+                            type="button"
+                            className="link"
+                            disabled={busy || feedbackDone[issue.id] !== undefined}
+                            onClick={() => void sendFeedback(issue, 'false_positive')}
+                          >
+                            {feedbackDone[issue.id] === 'false_positive' ? '已标误报' : '误报'}
+                            <span className="visually-hidden">issue {issue.id}</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="link"
+                            disabled={busy || feedbackDone[issue.id] !== undefined}
+                            onClick={() => void sendFeedback(issue, 'fixed')}
+                          >
+                            {feedbackDone[issue.id] === 'fixed' ? '已标修复' : '已修复'}
+                            <span className="visually-hidden">issue {issue.id}</span>
+                          </button>
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
+          )}
+          {(report.data.suppressedIssues?.length ?? 0) > 0 && (
+            <details>
+              <summary>
+                已被项目记忆确定性抑制的问题（{report.data.suppressedIssues!.length} 条，默认不展示）
+              </summary>
+              <ul>
+                {report.data.suppressedIssues!.map((i) => (
+                  <li key={i.id} className="small">
+                    <span className="mono">{i.file ?? '—'}</span>
+                    {i.line ? `:${i.line}` : ''} {i.description.slice(0, 160)}
+                    <span className="muted">（命中记忆 #{i.suppressedBy}）</span>
+                  </li>
+                ))}
+              </ul>
+            </details>
           )}
           {report.data.raw && (
             <details>
@@ -386,6 +477,45 @@ export function TaskDetailPage() {
 
       {t && !report.data && t.status === 'succeeded' && (
         <p className="muted">报告索引尚未生成，请稍后刷新。</p>
+      )}
+
+      {mcpAudit.data && mcpAudit.data.servers.length > 0 && (
+        <section className="card" aria-labelledby="task-mcp-title">
+          <h2 id="task-mcp-title">MCP 注入审计</h2>
+          <ul>
+            {mcpAudit.data.servers.map((s) => (
+              <li key={s.serverId} className="small">
+                <span className="mono">{s.serverName}</span>
+                {s.allowlistEnforced ? '' : '（白名单未强制执行——引擎不支持按工具过滤）'}
+                {s.toolStats ? (
+                  <span>
+                    {' '}
+                    调用统计：
+                    {Object.entries(s.toolStats)
+                      .map(([tool, v]) => `${tool} ${v.calls}次/失败${v.failures}`)
+                      .join('，')}
+                  </span>
+                ) : (
+                  <span className="muted">（引擎未上报工具统计）</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {memoryAudit.data && memoryAudit.data.count > 0 && (
+        <section className="card" aria-labelledby="task-memory-title">
+          <h2 id="task-memory-title">注入的项目记忆（{memoryAudit.data.count} 条）</h2>
+          <ul>
+            {memoryAudit.data.entries.map((m) => (
+              <li key={m.id} className="small">
+                <span className="tag">{m.kind}</span> {m.title}
+                {m.scope ? <span className="muted">（{m.scope}）</span> : null}
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
     </div>
   );

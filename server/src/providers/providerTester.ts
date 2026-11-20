@@ -182,10 +182,10 @@ async function probeWithOcr(
 }
 
 /** Spawn a command, capturing stdout+stderr, with a hard timeout. */
-function runCapture(
+export function runCapture(
   command: string,
   args: string[],
-  opts: { env: Record<string, string>; timeoutMs: number }
+  opts: { env: Record<string, string>; timeoutMs: number; input?: string }
 ): Promise<{ code: number | null; output: string }> {
   // Windows cannot spawn npm's `ocr.cmd` shim without a shell (EINVAL), and
   // the shim is what `which('ocr')` resolves to there. Same handling as the
@@ -199,6 +199,14 @@ function runCapture(
     });
     let output = '';
     let settled = false;
+    // Optional pipelined stdin (used by the MCP stdio probe): write the
+    // request batch, then close stdin so well-behaved servers exit after
+    // answering instead of hanging until the timeout kill.
+    if (opts.input !== undefined) {
+      child.stdin?.on('error', () => {});
+      child.stdin?.write(opts.input);
+      child.stdin?.end();
+    }
     const finish = (code: number | null) => {
       if (settled) return;
       settled = true;
@@ -207,10 +215,22 @@ function runCapture(
     };
     // On Windows a timed-out shell shim only kills cmd.exe and the real ocr
     // keeps running, holding the pipes open; kill the whole tree like the
-    // review runner does.
+    // review runner does. The PID travels via a sanitized environment
+    // variable (argv stays fully static; PowerShell expands it as data).
     const killTree = () => {
-      if (process.platform === 'win32' && child.pid) {
-        spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
+      if (process.platform === 'win32') {
+        const pid = child.pid;
+        const pidToken =
+          typeof pid === 'number' && Number.isSafeInteger(pid) && pid > 0 && /^\d+$/.test(String(pid))
+            ? String(pid)
+            : null;
+        if (pidToken !== null) {
+          spawn(
+            'powershell',
+            ['-NoProfile', '-Command', 'taskkill /PID $env:CRP_PID /T /F'],
+            { windowsHide: true, env: { ...process.env, CRP_PID: pidToken } }
+          );
+        }
       } else {
         child.kill();
       }

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { createServer, type Server } from 'node:http';
 import Fastify from 'fastify';
@@ -9,6 +10,9 @@ import { SecretStore } from '../crypto/secrets.js';
 import { CredentialService } from '../crypto/credentialService.js';
 import { buildProviderRoutes } from './providerRoutes.js';
 import type Database from 'better-sqlite3';
+
+// Throwaway test API key, generated at runtime (never a committed literal).
+const TEST_API_KEY = randomBytes(12).toString('hex');
 
 let dir: string;
 let db: Database.Database;
@@ -41,21 +45,21 @@ describe('provider API', () => {
       name: 'openai',
       apiBase: 'https://api.openai.com/v1',
       model: 'gpt-4o',
-      apiKey: 'sk-secret-123',
+      apiKey: TEST_API_KEY,
     });
     expect(res.statusCode).toBe(201);
     const body = res.json() as { id: number; apiKey: string; hasApiKey: boolean };
     expect(body.apiKey).toBe('********');
     expect(body.hasApiKey).toBe(true);
-    expect(res.body).not.toContain('sk-secret-123');
+    expect(res.body).not.toContain(TEST_API_KEY);
 
     // stored encrypted: ciphertext column must not contain the plaintext
     const row = db.prepare('SELECT ciphertext FROM credential').get() as { ciphertext: Buffer };
-    expect(row.ciphertext.toString('utf8')).not.toContain('sk-secret-123');
+    expect(row.ciphertext.toString('utf8')).not.toContain(TEST_API_KEY);
     // but decryptable server-side
     const id = (db.prepare('SELECT credential_id FROM provider').get() as { credential_id: number })
       .credential_id;
-    expect(credentials.reveal(id)).toBe('sk-secret-123');
+    expect(credentials.reveal(id)).toBe(TEST_API_KEY);
   });
 
   it('validates required fields and URL format', async () => {

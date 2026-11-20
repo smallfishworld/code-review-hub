@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 export type RepoType = 'svn' | 'git';
 
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 /**
  * Ordered, append-only list of migrations. Each entry runs once, tracked in
@@ -295,13 +295,19 @@ const MIGRATIONS: { version: number; name: string; up: (db: Database.Database) =
     version: 8,
     name: 'report-issue-category',
     up: (db) => {
-      // ocr comments carry a `category` (bug/security/performance/…); the
-      // console's report detail shows it as a "缺陷类型" column next to
-      // severity. Backfill is unnecessary: reports are re-indexable from
-      // their raw JSON, but existing rows keep category empty until then.
       db.exec(`
         ALTER TABLE report_issue ADD COLUMN category TEXT;
       `);
+    },
+  },
+  {
+    version: 9,
+    name: 'engines-mcp-memory',
+    up: (db) => {
+      addEngineTables(db);
+      addMcpTables(db);
+      addMemoryTables(db);
+      addIssueColumns(db);
     },
   },
 ];
@@ -372,4 +378,160 @@ export function listTables(db: Database.Database): string[] {
     .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
     .all() as { name: string }[];
   return rows.map((r) => r.name).sort();
+}
+
+/** Run one static DDL statement (single-statement, no interpolation). */
+function runDdl(db: Database.Database, sql: string): void {
+  db.prepare(sql).run();
+}
+
+/** v9: pluggable engine registry + engine selection columns. */
+function addEngineTables(db: Database.Database): void {
+  const createEngine = `
+    CREATE TABLE engine (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      kind TEXT NOT NULL CHECK (kind IN ('ocr','claude-code','codex','custom-http','custom-script')),
+      config TEXT NOT NULL DEFAULT '{}',
+      credential_id INTEGER REFERENCES credential(id),
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    )`;
+  runDdl(db, createEngine);
+  runDdl(db, 'ALTER TABLE task ADD COLUMN engine_id INTEGER REFERENCES engine(id)');
+  runDdl(db, 'ALTER TABLE report ADD COLUMN engine TEXT');
+  runDdl(db, 'ALTER TABLE repo ADD COLUMN engine_id INTEGER REFERENCES engine(id)');
+  runDdl(db, 'ALTER TABLE monitor_rule ADD COLUMN engine_id INTEGER REFERENCES engine(id)');
+}
+
+/** v9: MCP server registry + per-task injection audit. */
+function addMcpTables(db: Database.Database): void {
+  const createMcpServer = `
+    CREATE TABLE mcp_server (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      transport TEXT NOT NULL CHECK (transport IN ('stdio','http')),
+      config TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      scope TEXT NOT NULL DEFAULT 'global' CHECK (scope IN ('global','repo')),
+      repo_id INTEGER REFERENCES repo(id) ON DELETE CASCADE,
+      tool_allowlist TEXT,
+      timeout_sec INTEGER NOT NULL DEFAULT 10,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      CHECK ((scope = 'global' AND repo_id IS NULL) OR (scope = 'repo' AND repo_id IS NOT NULL))
+    )`;
+  runDdl(db, createMcpServer);
+  const createInjectionAudit = `
+    CREATE TABLE task_mcp_injection (
+      task_id INTEGER NOT NULL REFERENCES task(id) ON DELETE CASCADE,
+      server_id INTEGER NOT NULL REFERENCES mcp_server(id) ON DELETE CASCADE,
+      server_name TEXT NOT NULL,
+      allowlist_enforced INTEGER NOT NULL DEFAULT 0,
+      tool_stats TEXT,
+      PRIMARY KEY (task_id, server_id)
+    )`;
+  runDdl(db, createInjectionAudit);
+}
+
+/** v9: project memory tables (entry + FTS + injection audit + feedback). */
+function addMemoryTables(db: Database.Database): void {
+  const createMemoryEntry = `
+    CREATE TABLE memory_entry (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      repo_id INTEGER NOT NULL REFERENCES repo(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK (kind IN ('architecture','convention','pitfall','suppression','history','glossary')),
+      scope TEXT,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      fingerprint TEXT,
+      confidence REAL NOT NULL DEFAULT 0.5,
+      hits INTEGER NOT NULL DEFAULT 0,
+      feedback_count INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','archived','rejected')),
+      source_task_id INTEGER REFERENCES task(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      last_used_at TEXT
+    )`;
+  runDdl(db, createMemoryEntry);
+  runDdl(db, 'CREATE INDEX idx_memory_repo_kind ON memory_entry(repo_id, kind, status)');
+  runDdl(db, 'CREATE INDEX idx_memory_fingerprint ON memory_entry(repo_id, fingerprint)');
+
+  // FTS5 + trigram: the default unicode61 tokenizer makes Chinese body text
+  // (reports are forced Chinese) unsearchable. Probe module + tokenizer and
+  // record availability in `setting`; LIKE fallback when unavailable.
+  let ftsOk = false;
+  try {
+    runDdl(db, 'CREATE VIRTUAL TABLE temp.fts_probe USING fts5(x)');
+    runDdl(db, 'DROP TABLE temp.fts_probe');
+    runDdl(db, "CREATE VIRTUAL TABLE temp.fts_probe_tri USING fts5(x, tokenize='trigram')");
+    runDdl(db, 'DROP TABLE temp.fts_probe_tri');
+    ftsOk = true;
+  } catch {
+    // FTS5 or trigram unavailable: LIKE fallback (recorded below)
+  }
+  db.prepare(
+    'INSERT INTO setting (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
+  ).run('memory_fts_available', ftsOk ? '1' : '0');
+  if (ftsOk) {
+    runDdl(
+      db,
+      `CREATE VIRTUAL TABLE memory_fts USING fts5(
+        title, body, content='memory_entry', content_rowid='id', tokenize='trigram'
+      )`
+    );
+    runDdl(
+      db,
+      `CREATE TRIGGER memory_fts_ai AFTER INSERT ON memory_entry BEGIN
+        INSERT INTO memory_fts(rowid, title, body) VALUES (new.id, new.title, new.body);
+      END`
+    );
+    runDdl(
+      db,
+      `CREATE TRIGGER memory_fts_ad AFTER DELETE ON memory_entry BEGIN
+        INSERT INTO memory_fts(memory_fts, rowid, title, body)
+          VALUES ('delete', old.id, old.title, old.body);
+      END`
+    );
+    runDdl(
+      db,
+      `CREATE TRIGGER memory_fts_au AFTER UPDATE ON memory_entry BEGIN
+        INSERT INTO memory_fts(memory_fts, rowid, title, body)
+          VALUES ('delete', old.id, old.title, old.body);
+        INSERT INTO memory_fts(rowid, title, body) VALUES (new.id, new.title, new.body);
+      END`
+    );
+  }
+
+  const createInjection = `
+    CREATE TABLE memory_injection (
+      task_id INTEGER NOT NULL REFERENCES task(id) ON DELETE CASCADE,
+      memory_id INTEGER NOT NULL REFERENCES memory_entry(id) ON DELETE CASCADE,
+      PRIMARY KEY (task_id, memory_id)
+    )`;
+  runDdl(db, createInjection);
+  const createFeedback = `
+    CREATE TABLE review_feedback (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id INTEGER NOT NULL REFERENCES task(id) ON DELETE CASCADE,
+      issue_id INTEGER NOT NULL REFERENCES report_issue(id) ON DELETE CASCADE,
+      verdict TEXT NOT NULL CHECK (verdict IN ('false_positive','fixed','valid')),
+      memory_id INTEGER REFERENCES memory_entry(id) ON DELETE SET NULL,
+      note TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      UNIQUE (issue_id, verdict)
+    )`;
+  runDdl(db, createFeedback);
+}
+
+/** v9: issue range lines + deterministic suppression markers. */
+function addIssueColumns(db: Database.Database): void {
+  runDdl(db, 'ALTER TABLE report_issue ADD COLUMN end_line INTEGER');
+  runDdl(db, 'ALTER TABLE report_issue ADD COLUMN suppressed INTEGER NOT NULL DEFAULT 0');
+  runDdl(
+    db,
+    'ALTER TABLE report_issue ADD COLUMN suppressed_by INTEGER REFERENCES memory_entry(id) ON DELETE SET NULL'
+  );
 }

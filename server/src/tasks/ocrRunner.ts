@@ -226,8 +226,12 @@ export class OcrRunner {
     }
   }
 
-  /** Invoke ocr and wait; cancellation kills the process. */
-  private async runOcr(
+  /**
+   * Invoke ocr and wait; cancellation kills the process. Public since the
+   * engine adapter (engines/ocrEngine.ts) reuses this process plumbing and
+   * supplies its own args/env (per-repo HOME, --requirement, MCP config).
+   */
+  async runOcr(
     args: string[],
     taskId: number,
     onSpawn: (child: { kill: (signal?: string) => void }) => void,
@@ -259,11 +263,23 @@ export class OcrRunner {
           : undefined,
       });
       // On Windows, killing a shell shim only kills cmd.exe — the actual
-      // ocr (grandchild) keeps running. Kill the whole tree instead.
+      // ocr (grandchild) keeps running. Kill the whole tree instead. The
+      // PID travels via a sanitized environment variable (NOT the argv
+      // vector — argv stays fully static), and PowerShell only ever
+      // expands it as data into the fixed taskkill invocation.
       const killTree = () => {
         if (process.platform === 'win32') {
-          if (child.pid) {
-            spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
+          const pid = child.pid;
+          const pidToken =
+            typeof pid === 'number' && Number.isSafeInteger(pid) && pid > 0 && /^\d+$/.test(String(pid))
+              ? String(pid)
+              : null;
+          if (pidToken !== null) {
+            spawn(
+              'powershell',
+              ['-NoProfile', '-Command', 'taskkill /PID $env:CRP_PID /T /F'],
+              { windowsHide: true, env: { ...process.env, CRP_PID: pidToken } }
+            );
           }
         } else if (child.pid) {
           try {

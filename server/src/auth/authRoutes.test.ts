@@ -1,12 +1,19 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import Fastify from 'fastify';
 import { openDatabase } from '../db/database.js';
 import { buildAuthRoutes } from './authRoutes.js';
 import { hashPassword, verifyPasswordHash } from './authenticator.js';
 import type Database from 'better-sqlite3';
+
+// Throwaway test passwords, generated at runtime (never committed literals).
+const ADMIN_PASS = randomBytes(8).toString('hex');
+const FIRST_PASS = randomBytes(8).toString('hex');
+const SECOND_PASS = randomBytes(8).toString('hex');
+const WRONG_PASS = randomBytes(8).toString('hex');
 
 let dir: string;
 let db: Database.Database;
@@ -58,7 +65,7 @@ describe('admin password auth', () => {
     const set = await app.inject({
       method: 'POST',
       url: '/api/auth/password',
-      payload: { password: 'admin-pass' },
+      payload: { password: ADMIN_PASS },
     });
     expect(set.statusCode).toBe(200);
 
@@ -66,7 +73,7 @@ describe('admin password auth', () => {
     expect((await app.inject({ method: 'GET', url: '/api/repos' })).statusCode).toBe(401);
     expect((await login('wrong')).statusCode).toBe(401);
 
-    const ok = await login('admin-pass');
+    const ok = await login(ADMIN_PASS);
     expect(ok.statusCode).toBe(200);
     const { token } = ok.json() as { token: string };
     expect(token).toHaveLength(64);
@@ -111,15 +118,15 @@ describe('admin password auth', () => {
     await app.inject({
       method: 'POST',
       url: '/api/auth/password',
-      payload: { password: 'first-pass' },
+      payload: { password: FIRST_PASS },
     });
-    const { token } = (await login('first-pass')).json() as { token: string };
+    const { token } = (await login(FIRST_PASS)).json() as { token: string };
 
     const bad = await app.inject({
       method: 'POST',
       url: '/api/auth/password',
       headers: { authorization: `Bearer ${token}` },
-      payload: { password: 'second-pass', currentPassword: 'nope' },
+      payload: { password: SECOND_PASS, currentPassword: WRONG_PASS },
     });
     expect(bad.statusCode).toBe(400);
 
@@ -127,10 +134,10 @@ describe('admin password auth', () => {
       method: 'POST',
       url: '/api/auth/password',
       headers: { authorization: `Bearer ${token}` },
-      payload: { password: 'second-pass', currentPassword: 'first-pass' },
+      payload: { password: SECOND_PASS, currentPassword: FIRST_PASS },
     });
     expect(good.statusCode).toBe(200);
-    expect((await login('second-pass')).statusCode).toBe(200);
+    expect((await login(SECOND_PASS)).statusCode).toBe(200);
   });
 
   it('rejects short passwords', async () => {
@@ -146,7 +153,7 @@ describe('admin password auth', () => {
     await app.inject({
       method: 'POST',
       url: '/api/auth/password',
-      payload: { password: 'admin-pass' },
+      payload: { password: ADMIN_PASS },
     });
     const health = await app.inject({ method: 'GET', url: '/api/health' });
     expect(health.statusCode).toBe(404); // not registered in this test app
@@ -160,7 +167,7 @@ describe('admin password auth', () => {
       await open.inject({
         method: 'POST',
         url: '/api/auth/password',
-        payload: { password: 'admin-pass' },
+        payload: { password: ADMIN_PASS },
       });
       expect((await open.inject({ method: 'GET', url: '/api/repos' })).statusCode).toBe(200);
     } finally {

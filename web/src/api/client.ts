@@ -129,10 +129,13 @@ export interface ReportIssue {
   id: number;
   file: string | null;
   line: number | null;
+  endLine?: number | null;
   severity: string | null;
   category?: string | null;
   description: string;
   suggestion?: string | null;
+  suppressed?: boolean;
+  suppressedBy?: number | null;
 }
 
 export interface ReportDetail {
@@ -142,10 +145,17 @@ export interface ReportDetail {
     issueCount: number;
     rawPath: string;
     parsedOk: boolean;
+    engine?: string | null;
     createdAt: string;
   };
   issues: ReportIssue[];
+  suppressedIssues?: ReportIssue[];
   raw?: string;
+}
+
+export interface TaskMemoryAudit {
+  count: number;
+  entries: { id: number; kind: string; title: string; scope: string | null; confidence: number }[];
 }
 
 export interface MonitorStatus {
@@ -253,4 +263,87 @@ export interface LogFile {
   name: string;
   size: number;
   modified: string;
+}
+
+// --- engines / MCP / memory --------------------------------------------------
+
+export interface EngineCapabilitiesDto {
+  vcs: string[];
+  revisionMode: 'single' | 'range';
+  fullFileScan: boolean;
+  mcp: 'config-inject' | 'none';
+  memoryInjection: 'requirement' | 'none';
+  resume: boolean;
+  streaming: boolean;
+  minVersion?: string;
+}
+
+export interface Engine {
+  id: number;
+  name: string;
+  kind: string;
+  enabled: boolean;
+  isDefault: boolean;
+  capabilities: EngineCapabilitiesDto | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface McpServer {
+  id: number;
+  name: string;
+  transport: 'stdio' | 'http';
+  config: Record<string, unknown>;
+  enabled: boolean;
+  scope: 'global' | 'repo';
+  repoId: number | null;
+  toolAllowlist: string[] | null;
+  timeoutSec: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface McpProbeResult {
+  ok: boolean;
+  stage?: 'start' | 'timeout' | 'protocol';
+  error?: string;
+  tools: string[];
+}
+
+export interface MemoryEntry {
+  id: number;
+  repoId: number;
+  kind: 'architecture' | 'convention' | 'pitfall' | 'suppression' | 'history' | 'glossary';
+  scope: string | null;
+  title: string;
+  body: string;
+  confidence: number;
+  hits: number;
+  feedbackCount: number;
+  status: 'active' | 'archived' | 'rejected';
+  sourceTaskId: number | null;
+  createdAt: string;
+  updatedAt: string;
+  lastUsedAt: string | null;
+}
+
+export interface MemoryList {
+  ftsAvailable: boolean;
+  items: MemoryEntry[];
+}
+
+export interface TaskMcpAudit {
+  servers: {
+    serverId: number;
+    serverName: string;
+    allowlistEnforced: boolean;
+    toolStats: Record<string, { calls: number; failures: number }> | null;
+  }[];
+  statsReported: boolean;
+}
+
+export interface FeedbackOutcome {
+  feedbackId: number;
+  memoryId: number | null;
+  memoryAction: 'created' | 'reinforced' | 'none';
 }

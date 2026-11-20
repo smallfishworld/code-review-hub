@@ -1,4 +1,5 @@
 import { useEffect, useId, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api, type Repo } from '../api/client';
 import { errorText, useApi, usePageTitle } from '../api/hooks';
 import { useConfirm } from '../components/ConfirmDialog';
@@ -336,6 +337,9 @@ export function ReposPage() {
                           <button type="button" className="link" onClick={() => startEdit(repo)}>
                             编辑<span className="visually-hidden">仓库 {repo.name}</span>
                           </button>
+                          <Link to={`/repos/${repo.id}/memory`}>
+                            项目记忆<span className="visually-hidden">仓库 {repo.name}</span>
+                          </Link>
                           <button type="button" className="link" onClick={() => toggle(repo)}>
                             {repo.enabled ? '停用' : '启用'}
                             <span className="visually-hidden">仓库 {repo.name}</span>

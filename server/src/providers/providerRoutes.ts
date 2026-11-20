@@ -86,6 +86,13 @@ export function buildProviderRoutes(
   const getRow = (id: number): ProviderRow | undefined =>
     db.prepare('SELECT * FROM provider WHERE id = ?').get(id) as ProviderRow | undefined;
 
+  /** Parse a :id path parameter into a validated positive integer (taint break). */
+  const parseIdParam = (raw: string): number | null => {
+    if (!/^\d{1,15}$/.test(raw)) return null;
+    const n = Number(raw);
+    return Number.isSafeInteger(n) && n > 0 ? n : null;
+  };
+
   const validate = (input: ProviderInput, partial = false) => {
     const required = (field: keyof ProviderInput, label: string) => {
       const v = input[field];
@@ -119,13 +126,24 @@ export function buildProviderRoutes(
 
     app.get('/api/providers/:id', async (req, reply) => {
       const { id } = req.params as { id: string };
-      const row = getRow(Number(id));
+      const idNum = parseIdParam(id);
+      if (!idNum) return reply.code(400).send({ message: 'id 必须是正整数' });
+      const row = getRow(idNum);
       if (!row) return reply.code(404).send({ message: 'Provider 不存在' });
       return toDto(row);
     });
 
     app.post('/api/providers', async (req, reply) => {
-      const input = (req.body ?? {}) as ProviderInput;
+      const raw = (req.body ?? {}) as ProviderInput;
+      // Explicit field extraction with type guards: only known, well-typed
+      // provider fields continue past this point (never the raw body).
+      const input: ProviderInput = {
+        name: typeof raw.name === 'string' ? raw.name : '',
+        apiBase: typeof raw.apiBase === 'string' ? raw.apiBase : '',
+        model: typeof raw.model === 'string' ? raw.model : '',
+        apiKey: typeof raw.apiKey === 'string' ? raw.apiKey : undefined,
+        protocol: typeof raw.protocol === 'string' ? raw.protocol : 'anthropic',
+      };
       try {
         validate(input);
       } catch (err) {
@@ -155,9 +173,19 @@ export function buildProviderRoutes(
 
     app.put('/api/providers/:id', async (req, reply) => {
       const { id } = req.params as { id: string };
-      const row = getRow(Number(id));
+      const idNum = parseIdParam(id);
+      if (!idNum) return reply.code(400).send({ message: 'id 必须是正整数' });
+      const row = getRow(idNum);
       if (!row) return reply.code(404).send({ message: 'Provider 不存在' });
-      const input = (req.body ?? {}) as ProviderInput;
+      const raw = (req.body ?? {}) as ProviderInput;
+      // Same explicit extraction as POST (type-guarded, whitelist fields).
+      const input: ProviderInput = {
+        name: typeof raw.name === 'string' ? raw.name : undefined,
+        apiBase: typeof raw.apiBase === 'string' ? raw.apiBase : undefined,
+        model: typeof raw.model === 'string' ? raw.model : undefined,
+        apiKey: typeof raw.apiKey === 'string' ? raw.apiKey : undefined,
+        protocol: typeof raw.protocol === 'string' ? raw.protocol : undefined,
+      };
       try {
         validate(input, true);
       } catch (err) {
@@ -185,18 +213,20 @@ export function buildProviderRoutes(
         input.model?.trim() ?? row.model,
         input.protocol ?? row.protocol ?? 'anthropic',
         credentialId,
-        Number(id)
+        idNum
       );
-      return toDto(getRow(Number(id))!);
+      return toDto(getRow(idNum)!);
     });
 
     app.delete('/api/providers/:id', async (req, reply) => {
       const { id } = req.params as { id: string };
-      const row = getRow(Number(id));
+      const idNum = parseIdParam(id);
+      if (!idNum) return reply.code(400).send({ message: 'id 必须是正整数' });
+      const row = getRow(idNum);
       if (!row) return reply.code(404).send({ message: 'Provider 不存在' });
-      db.prepare('DELETE FROM provider WHERE id = ?').run(Number(id));
+      db.prepare('DELETE FROM provider WHERE id = ?').run(idNum);
       if (row.credential_id) credentials.delete(row.credential_id);
-      if (defaultProviderId(db) === Number(id)) {
+      if (defaultProviderId(db) === idNum) {
         db.prepare("DELETE FROM setting WHERE key = 'default_provider_id'").run();
       }
       return reply.code(204).send();
@@ -204,18 +234,22 @@ export function buildProviderRoutes(
 
     app.post('/api/providers/:id/default', async (req, reply) => {
       const { id } = req.params as { id: string };
-      const row = getRow(Number(id));
+      const idNum = parseIdParam(id);
+      if (!idNum) return reply.code(400).send({ message: 'id 必须是正整数' });
+      const row = getRow(idNum);
       if (!row) return reply.code(404).send({ message: 'Provider 不存在' });
       db.prepare(
         `INSERT INTO setting (key, value) VALUES ('default_provider_id', ?)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value`
-      ).run(String(id));
-      return toDto(getRow(Number(id))!);
+      ).run(String(idNum));
+      return toDto(getRow(idNum)!);
     });
 
     app.post('/api/providers/:id/test', async (req, reply) => {
       const { id } = req.params as { id: string };
-      const row = getRow(Number(id));
+      const idNum = parseIdParam(id);
+      if (!idNum) return reply.code(400).send({ message: 'id 必须是正整数' });
+      const row = getRow(idNum);
       if (!row) return reply.code(404).send({ message: 'Provider 不存在' });
       const key = row.credential_id ? credentials.reveal(row.credential_id) : null;
 

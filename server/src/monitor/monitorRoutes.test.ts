@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import Fastify from 'fastify';
 import { openDatabase } from '../db/database.js';
 import { SecretStore } from '../crypto/secrets.js';
@@ -46,15 +46,15 @@ afterEach(async () => {
 
 function makeSvnRepo(commits: number): { url: string } {
   const repoDir = join(dir, 'svnrepo');
-  execSync(`svnadmin create ${JSON.stringify(repoDir)}`);
+  execFileSync('svnadmin', ['create', repoDir]);
   const url = 'file:///' + repoDir.replaceAll('\\', '/');
   const wc = join(dir, 'svnwc');
-  execSync(`svn checkout ${JSON.stringify(url)} ${JSON.stringify(wc)}`);
+  execFileSync('svn', ['checkout', url, wc]);
   for (let i = 1; i <= commits; i++) {
     mkdirSync(join(wc, 'trunk/src'), { recursive: true });
     writeFileSync(join(wc, `trunk/src/f${i}.cpp`), String(i));
-    execSync('svn add --force .', { cwd: wc });
-    execSync(`svn commit -m "c${i}" --username u${i}`, { cwd: wc });
+    execFileSync('svn', ['add', '--force', '.'], { cwd: wc });
+    execFileSync('svn', ['commit', '-m', `c${i}`, '--username', `u${i}`], { cwd: wc });
   }
   return { url };
 }
@@ -137,8 +137,8 @@ describe('monitor rule API', () => {
 
     const wc = join(dir, 'svnwc');
     writeFileSync(join(wc, 'trunk/src/new.cpp'), 'n');
-    execSync('svn add --force .', { cwd: wc });
-    execSync('svn commit -m "new" --username zhangsan', { cwd: wc });
+    execFileSync('svn', ['add', '--force', '.'], { cwd: wc });
+    execFileSync('svn', ['commit', '-m', 'new', '--username', 'zhangsan'], { cwd: wc });
 
     const polled = await post(`/api/monitor/rules/${repoId}/poll`);
     expect(polled.statusCode).toBe(200);

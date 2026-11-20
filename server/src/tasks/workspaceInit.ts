@@ -101,7 +101,10 @@ export class WorkspaceInitService {
         // anywhere else leaves the redirected store empty and the review
         // hangs on an invisible auth prompt forever.
         const { prepareOcrHomeSvnConfig } = await import('../providers/ocrProviderConfig.js');
-        const ocrHome = join(this.dataDir, 'ocr-home');
+        const { ocrHomeDir } = await import('../engines/ocrEngine.js');
+        // Per-repo isolated HOME — same layout the engine uses at review
+        // time, so the seeded credential store is the one ocr reads later.
+        const ocrHome = ocrHomeDir(this.dataDir, repoId);
         // servers file: cert-trust so an intranet https checkout cannot
         // prompt either.
         prepareOcrHomeSvnConfig(ocrHome);

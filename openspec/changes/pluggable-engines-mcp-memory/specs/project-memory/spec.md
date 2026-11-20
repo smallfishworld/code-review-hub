@@ -8,7 +8,7 @@
 
 ### Requirement: 记忆条目模型
 
-每个仓库 SHALL 拥有独立的记忆集合，条目字段 MUST 包含：类型（architecture / convention / pitfall / suppression / history / glossary 六类之一）、作用范围（路径前缀或模块名，空表示全仓库）、标题、正文、置信度（0–1）、命中次数、状态（active / archived / rejected）、来源任务（可空）。条目 MUST 同时持久化为 markdown 文件（`<DATA_DIR>/memory/<repo-id>/` 下按类型组织）与 SQLite 索引（含 FTS5 全文索引）；两者以 SQLite 为准，markdown 可随时从索引重建，用户手工编辑 markdown 后平台 SHALL 提供重新加载入口。
+每个仓库 SHALL 拥有独立的记忆集合，条目字段 MUST 包含：类型（architecture / convention / pitfall / suppression / history / glossary 六类之一）、作用范围（路径前缀或模块名，空表示全仓库）、标题、正文、置信度（0–1）、检索命中次数、人工确认次数（与检索命中独立计数）、误报指纹（suppression 类必填，其余类型可空：由文件路径前缀与问题特征归一化生成的稳定标识）、状态（active / archived / rejected）、来源任务（可空）。条目 MUST 同时持久化为 markdown 文件（`<DATA_DIR>/memory/<repo-id>/` 下按类型组织）与 SQLite 索引（含 FTS5 全文索引，分词方式 MUST 对中日韩文本有效）；两者以 SQLite 为准，markdown 可随时从索引重建，用户手工编辑 markdown 后平台 SHALL 提供重新加载入口。
 
 #### Scenario: 查看仓库记忆
 - **WHEN** 用户打开仓库详情的项目记忆 tab
@@ -20,7 +20,7 @@
 
 ### Requirement: 评审前检索注入
 
-评审任务启动前，平台 SHALL 基于变更文件列表检索该仓库的记忆：按作用范围前缀匹配 + FTS 全文匹配召回，按 置信度×时间新近度×命中次数 排序，注入内容截断至固定 token 预算（默认 1500）。注入经由引擎能力声明的通道（ocr 为 `--requirement` 业务背景参数）；引擎不支持注入时 MUST 跳过且任务正常执行。每次实际注入的条目集合 MUST 记录到任务（注入审计），被注入条目的命中次数与最近命中时间 MUST 更新。
+评审任务启动前，平台 SHALL 自行采集本次评审的变更文件列表与新增行标识符（SVN / Git diff，于工作副本更新至目标节点后、评审执行前完成）作为检索输入；采集失败时降级为仅全仓库作用域 + 全文匹配，MUST NOT 使任务失败。检索按作用范围前缀匹配 + FTS 全文匹配召回，按 置信度×时间新近度×命中次数 排序，注入内容截断至固定 token 预算（默认 1500，按中英混合字符保守估算）。注入经由引擎能力声明的通道（ocr 为 `--requirement` 业务背景参数）；引擎不支持注入时 MUST 跳过且任务正常执行。每次实际注入的条目集合 MUST 记录到任务（注入审计），被注入条目的命中次数与最近命中时间 MUST 更新。
 
 #### Scenario: 命中抑制记忆
 - **WHEN** 变更文件命中一条 suppression 记忆（此前被人工确认的误报模式），且任务引擎为 ocr
@@ -33,6 +33,18 @@
 #### Scenario: 预算截断
 - **WHEN** 召回的记忆内容总量超过 token 预算
 - **THEN** 按排序得分从高到低保留，超出部分不注入
+
+### Requirement: 报告确定性抑制
+
+对归一化后的评审 issue，平台 SHALL 按该仓库激活的 suppression 记忆执行确定性过滤：issue 的文件路径与问题特征命中某条 suppression 的误报指纹时，该 issue MUST 在报告入库前被标记为已抑制（记录命中的记忆条目），默认不展示于报告视图与通知，并可在报告详情展开查看。抑制动作 MUST 确定性执行、不依赖评审引擎对注入内容的遵从。
+
+#### Scenario: 误报模式被确定性抑制
+- **WHEN** 一条 issue 命中已有的 suppression 指纹，且该次评审引擎未理会注入的抑制提示仍报出该 issue
+- **THEN** 报告默认视图与通知不包含该 issue，报告详情可展开查看被抑制条目及其命中的记忆
+
+#### Scenario: 无命中不误伤
+- **WHEN** 仓库没有任何激活的 suppression 记忆
+- **THEN** 报告与通知行为与现状一致
 
 ### Requirement: 评审后蒸馏写入
 
@@ -52,15 +64,15 @@
 
 ### Requirement: issue 反馈闭环
 
-报告的每条 issue SHALL 提供「误报」与「已修复」反馈操作（登录用户可用）。标记误报 MUST 生成或强化一条 suppression 记忆（含文件匹配范围、原因、来源 issue）；标记已修复 MUST 生成一条 history 记忆；同一模式连续 3 次被标记误报时，对应 suppression 条目置信度 MUST 提升。反馈操作 MUST 记录到 review_feedback 表并可追溯。
+报告的每条 issue SHALL 提供「误报」与「已修复」反馈操作（登录用户可用）。标记误报 MUST 生成或强化一条 suppression 记忆：按误报指纹判定「同一模式」——指纹相同的反馈聚合到同一条 suppression（含文件匹配范围、原因、来源 issue），其人工确认计数独立于检索命中计数单独维护，确认计数每达到 3 的倍数时置信度 MUST 按规则提升。标记已修复 MUST 生成一条 history 记忆。每条反馈 MUST 记录到 review_feedback 表并关联其生成或强化的记忆条目，可追溯。
 
 #### Scenario: 标记误报
 - **WHEN** 用户对某条 issue 点击误报并提交原因
 - **THEN** 生成 suppression 记忆并在下次评审前可被召回注入；该 issue 标记反馈状态
 
 #### Scenario: 重复误报提升置信度
-- **WHEN** 相似模式第 3 次被标记误报
-- **THEN** 对应 suppression 条目置信度按规则提升，注入排序更靠前
+- **WHEN** 同一误报指纹累计第 3 次被标记误报
+- **THEN** 对应 suppression 条目人工确认计数达到 3，置信度按规则提升，注入排序更靠前
 
 ### Requirement: 记忆演化与治理
 

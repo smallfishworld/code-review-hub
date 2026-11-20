@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { openDatabase } from '../db/database.js';
 import { SecretStore } from '../crypto/secrets.js';
 import { CredentialService } from '../crypto/credentialService.js';
@@ -53,19 +53,19 @@ function makeSvnRepo(
   commits: { author: string; files: Record<string, string> }[]
 ): { url: string; revisions: number[] } {
   const repoDir = join(dir, 'svnrepo');
-  execSync(`svnadmin create ${JSON.stringify(repoDir)}`);
+  execFileSync('svnadmin', ['create', repoDir]);
   const url = svnUrl(repoDir);
   const wc = join(dir, 'svnwc');
-  execSync(`svn checkout ${JSON.stringify(url)} ${JSON.stringify(wc)}`);
+  execFileSync('svn', ['checkout', url, wc]);
   const revisions: number[] = [];
   for (const c of commits) {
     for (const [name, content] of Object.entries(c.files)) {
       const full = join(wc, name);
       mkdirSync(join(full, '..'), { recursive: true });
       writeFileSync(full, content);
-      execSync('svn add --force .', { cwd: wc });
+      execFileSync('svn', ['add', '--force', '.'], { cwd: wc });
     }
-    const out = execSync(`svn commit -m msg --username ${c.author}`, { cwd: wc }).toString();
+    const out = execFileSync('svn', ['commit', '-m', 'msg', '--username', c.author], { cwd: wc, encoding: 'utf8' }).toString();
     const m = /Committed revision (\d+)/.exec(out);
     revisions.push(Number(m![1]));
   }
@@ -142,8 +142,8 @@ describe('SVN monitor (4.1/4.3/4.4)', () => {
     // new commit after enabling is picked up
     const wc = join(dir, 'svnwc');
     writeFileSync(join(wc, 'd.txt'), '4');
-    execSync(`svn add ${JSON.stringify(join(wc, 'd.txt'))}`, { cwd: wc });
-    const out = execSync('svn commit -m msg --username dave', { cwd: wc }).toString();
+    execFileSync('svn', ['add', join(wc, 'd.txt')], { cwd: wc });
+    const out = execFileSync('svn', ['commit', '-m', 'msg', '--username', 'dave'], { cwd: wc, encoding: 'utf8' }).toString();
     const rev = Number(/Committed revision (\d+)/.exec(out)![1]);
 
     await monitor.pollRule(ruleId);
@@ -181,8 +181,8 @@ describe('SVN monitor (4.1/4.3/4.4)', () => {
     const wc = join(dir, 'svnwc');
     for (let i = 2; i <= 4; i++) {
       writeFileSync(join(wc, `f${i}.txt`), String(i));
-      execSync(`svn add ${JSON.stringify(join(wc, `f${i}.txt`))}`, { cwd: wc });
-      execSync(`svn commit -m c${i} --username u${i}`, { cwd: wc });
+      execFileSync('svn', ['add', join(wc, `f${i}.txt`)], { cwd: wc });
+      execFileSync('svn', ['commit', '-m', `c${i}`, '--username', `u${i}`], { cwd: wc });
     }
     await monitor.pollRule(ruleId);
     await queue.idle();
@@ -197,11 +197,11 @@ describe('SVN monitor (4.1/4.3/4.4)', () => {
 
     const wc = join(dir, 'svnwc');
     writeFileSync(join(wc, 'b.txt'), 'b');
-    execSync(`svn add ${JSON.stringify(join(wc, 'b.txt'))}`, { cwd: wc });
-    execSync('svn commit -m m --username wangwu', { cwd: wc });
+    execFileSync('svn', ['add', join(wc, 'b.txt')], { cwd: wc });
+    execFileSync('svn', ['commit', '-m', 'm', '--username', 'wangwu'], { cwd: wc });
     writeFileSync(join(wc, 'c.txt'), 'c');
-    execSync(`svn add ${JSON.stringify(join(wc, 'c.txt'))}`, { cwd: wc });
-    execSync('svn commit -m m --username zhangsan', { cwd: wc });
+    execFileSync('svn', ['add', join(wc, 'c.txt')], { cwd: wc });
+    execFileSync('svn', ['commit', '-m', 'm', '--username', 'zhangsan'], { cwd: wc });
 
     await monitor.pollRule(ruleId);
     await queue.idle();
@@ -221,12 +221,12 @@ describe('SVN monitor (4.1/4.3/4.4)', () => {
     const wc = join(dir, 'svnwc');
     mkdirSync(join(wc, 'docs'), { recursive: true });
     writeFileSync(join(wc, 'docs/readme.md'), 'doc');
-    execSync('svn add --force .', { cwd: wc });
-    execSync('svn commit -m "docs change" --username alice', { cwd: wc });
+    execFileSync('svn', ['add', '--force', '.'], { cwd: wc });
+    execFileSync('svn', ['commit', '-m', 'docs change', '--username', 'alice'], { cwd: wc });
     mkdirSync(join(wc, 'trunk/src/core'), { recursive: true });
     writeFileSync(join(wc, 'trunk/src/core/b.cpp'), 'code');
-    execSync('svn add --force .', { cwd: wc });
-    execSync('svn commit -m "code change" --username alice', { cwd: wc });
+    execFileSync('svn', ['add', '--force', '.'], { cwd: wc });
+    execFileSync('svn', ['commit', '-m', 'code change', '--username', 'alice'], { cwd: wc });
 
     await monitor.pollRule(ruleId);
     await queue.idle();
@@ -245,18 +245,18 @@ describe('SVN monitor (4.1/4.3/4.4)', () => {
     // author matches, path doesn't
     mkdirSync(join(wc, 'docs'), { recursive: true });
     writeFileSync(join(wc, 'docs/x.md'), 'x');
-    execSync('svn add --force .', { cwd: wc });
-    execSync('svn commit -m m --username zhangsan', { cwd: wc });
+    execFileSync('svn', ['add', '--force', '.'], { cwd: wc });
+    execFileSync('svn', ['commit', '-m', 'm', '--username', 'zhangsan'], { cwd: wc });
     // path matches, author doesn't
     mkdirSync(join(wc, 'trunk/src/core'), { recursive: true });
     writeFileSync(join(wc, 'trunk/src/core/y.cpp'), 'y');
-    execSync('svn add --force .', { cwd: wc });
-    execSync('svn commit -m m --username wangwu', { cwd: wc });
+    execFileSync('svn', ['add', '--force', '.'], { cwd: wc });
+    execFileSync('svn', ['commit', '-m', 'm', '--username', 'wangwu'], { cwd: wc });
     // both match
     mkdirSync(join(wc, 'trunk/src/core'), { recursive: true });
     writeFileSync(join(wc, 'trunk/src/core/z.cpp'), 'z');
-    execSync('svn add --force .', { cwd: wc });
-    execSync('svn commit -m m --username zhangsan', { cwd: wc });
+    execFileSync('svn', ['add', '--force', '.'], { cwd: wc });
+    execFileSync('svn', ['commit', '-m', 'm', '--username', 'zhangsan'], { cwd: wc });
 
     await monitor.pollRule(ruleId);
     await queue.idle();
@@ -273,8 +273,8 @@ describe('SVN monitor (4.1/4.3/4.4)', () => {
 
     const wc = join(dir, 'svnwc');
     writeFileSync(join(wc, 'b.txt'), 'b');
-    execSync(`svn add ${JSON.stringify(join(wc, 'b.txt'))}`, { cwd: wc });
-    execSync('svn commit -m m --username alice', { cwd: wc });
+    execFileSync('svn', ['add', join(wc, 'b.txt')], { cwd: wc });
+    execFileSync('svn', ['commit', '-m', 'm', '--username', 'alice'], { cwd: wc });
 
     await monitor.pollRule(ruleId);
     await queue.idle();
@@ -312,8 +312,8 @@ describe('SVN monitor (4.1/4.3/4.4)', () => {
 
     const wc = join(dir, 'svnwc');
     writeFileSync(join(wc, 'b.txt'), 'b');
-    execSync(`svn add ${JSON.stringify(join(wc, 'b.txt'))}`, { cwd: wc });
-    execSync('svn commit -m m --username alice', { cwd: wc });
+    execFileSync('svn', ['add', join(wc, 'b.txt')], { cwd: wc });
+    execFileSync('svn', ['commit', '-m', 'm', '--username', 'alice'], { cwd: wc });
     await monitor.pollRule(ruleId);
     await queue.idle();
     expect(tasks()).toHaveLength(1);
@@ -321,8 +321,8 @@ describe('SVN monitor (4.1/4.3/4.4)', () => {
     // disable: pollRule is a no-op
     monitor.disableRule(ruleId);
     writeFileSync(join(wc, 'c.txt'), 'c');
-    execSync(`svn add ${JSON.stringify(join(wc, 'c.txt'))}`, { cwd: wc });
-    execSync('svn commit -m m --username alice', { cwd: wc });
+    execFileSync('svn', ['add', join(wc, 'c.txt')], { cwd: wc });
+    execFileSync('svn', ['commit', '-m', 'm', '--username', 'alice'], { cwd: wc });
     await monitor.pollRule(ruleId);
     await queue.idle();
     expect(tasks()).toHaveLength(1);
@@ -370,11 +370,11 @@ describe('SVN monitor (4.1/4.3/4.4)', () => {
 
     const wc = join(dir, 'svnwc');
     writeFileSync(join(wc, 'b.txt'), 'b');
-    execSync(`svn add ${JSON.stringify(join(wc, 'b.txt'))}`, { cwd: wc });
-    execSync('svn commit -m m --username alice', { cwd: wc });
+    execFileSync('svn', ['add', join(wc, 'b.txt')], { cwd: wc });
+    execFileSync('svn', ['commit', '-m', 'm', '--username', 'alice'], { cwd: wc });
     writeFileSync(join(wc, 'c.txt'), 'c');
-    execSync(`svn add ${JSON.stringify(join(wc, 'c.txt'))}`, { cwd: wc });
-    execSync('svn commit -m m --username bob', { cwd: wc });
+    execFileSync('svn', ['add', join(wc, 'c.txt')], { cwd: wc });
+    execFileSync('svn', ['commit', '-m', 'm', '--username', 'bob'], { cwd: wc });
 
     await monitor.pollRule(ruleId);
     await queue.idle();
@@ -393,7 +393,7 @@ function makeGitRepo(
   commits: { author: string; files: Record<string, string> }[]
 ): { url: string; shas: string[] } {
   const origin = join(dir, 'origin.git');
-  execSync(`git init -b main ${JSON.stringify(origin)}`);
+  execFileSync('git', ['init', '-b', 'main', origin]);
   const shas: string[] = [];
   for (const c of commits) {
     for (const [name, content] of Object.entries(c.files)) {
@@ -401,11 +401,11 @@ function makeGitRepo(
       mkdirSync(join(full, '..'), { recursive: true });
       writeFileSync(full, content);
     }
-    execSync('git add -A', { cwd: origin });
-    execSync(`git -c user.name=${c.author} -c user.email=${c.author}@t commit -m msg`, {
+    execFileSync('git', ['add', '-A'], { cwd: origin });
+    execFileSync('git', ['-c', `user.name=${c.author}`, '-c', `user.email=${c.author}@t`, 'commit', '-m', 'msg'], {
       cwd: origin,
     });
-    shas.push(execSync('git rev-parse HEAD', { cwd: origin }).toString().trim());
+    shas.push(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: origin, encoding: 'utf8' }).toString().trim());
   }
   return { url: origin, shas };
 }
@@ -416,9 +416,9 @@ function gitCommit(origin: string, author: string, files: Record<string, string>
     mkdirSync(join(full, '..'), { recursive: true });
     writeFileSync(full, content);
   }
-  execSync('git add -A', { cwd: origin });
-  execSync(`git -c user.name=${author} -c user.email=${author}@t commit -m msg`, { cwd: origin });
-  return execSync('git rev-parse HEAD', { cwd: origin }).toString().trim();
+  execFileSync('git', ['add', '-A'], { cwd: origin });
+  execFileSync('git', ['-c', `user.name=${author}`, '-c', `user.email=${author}@t`, 'commit', '-m', 'msg'], { cwd: origin });
+  return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: origin, encoding: 'utf8' }).toString().trim();
 }
 
 describe('Git monitor (4.2/4.3/4.4)', () => {
@@ -482,7 +482,7 @@ describe('Git monitor (4.2/4.3/4.4)', () => {
     }).last_node;
 
     const moved = `${url}-moved`;
-    execSync(`mv ${JSON.stringify(url)} ${JSON.stringify(moved)}`);
+    execFileSync('mv', [url, moved]);
     await monitor.pollRule(ruleId);
     const st = db
       .prepare('SELECT last_node, last_poll_error FROM monitor_state WHERE rule_id = ?')
@@ -490,7 +490,7 @@ describe('Git monitor (4.2/4.3/4.4)', () => {
     expect(st.last_poll_error).toBeTruthy();
     expect(st.last_node).toBe(before);
 
-    execSync(`mv ${JSON.stringify(moved)} ${JSON.stringify(url)}`);
+    execFileSync('mv', [moved, url]);
     const sha = gitCommit(url, 'bob', { 'b.txt': '2' });
     await monitor.pollRule(ruleId);
     await queue.idle();

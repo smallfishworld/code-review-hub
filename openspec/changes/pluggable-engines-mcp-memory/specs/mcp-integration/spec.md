@@ -20,22 +20,32 @@
 
 ### Requirement: 作用域与注入
 
-评审任务执行时，平台 SHALL 收集对该任务生效的 MCP 服务器：作用域为 global 且启用的全部 + 绑定该任务仓库且启用的全部，并注入引擎配置。注入方式由引擎能力决定：声明 config-inject 的引擎（ocr）MUST 通过其隔离 HOME 配置文件的 MCP 段注入；声明 none 的引擎 MUST 忽略注册表且任务不受影响。工具白名单非空时 MUST 生效（仅放行列出的工具）。
+评审任务执行时，平台 SHALL 收集对该任务生效的 MCP 服务器：作用域为 global 且启用的全部 + 绑定该任务仓库且启用的全部，并注入引擎配置。注入方式由引擎能力决定：声明 config-inject 的引擎（ocr）MUST 通过其隔离 HOME 配置文件的 MCP 段注入；声明 none 的引擎 MUST 忽略注册表且任务不受影响。注入 MUST 与并发任务隔离：并行执行的评审 MUST NOT 互相覆盖注入配置，任何任务 MUST NOT 被注入其仓库未绑定的服务器。引擎运行时不具备 MCP 注入能力时（如 ocr 版本低于 1.13），平台 MUST 跳过注入、任务正常执行，并在任务记录中写明降级原因。
+
+工具白名单非空时，平台 MUST 尽力强制：引擎支持按工具过滤时 MUST 仅放行列出的工具；引擎不支持时 MUST 注入完整服务器并在任务记录与控制台标注「白名单未强制执行」。
 
 #### Scenario: 仓库绑定注入 ocr
 - **WHEN** 仓库 R 绑定了启用的 codegraph（stdio）服务器，R 的评审任务由 ocr 引擎执行
-- **THEN** 该次评审运行在隔离 HOME 配置中包含 codegraph 的 mcp_servers 条目，评审完成后审计日志记录该注入
+- **THEN** 该次评审运行在其仓库隔离的 HOME 配置中包含 codegraph 的 mcp_servers 条目，评审完成后任务记录可查该注入
 
 #### Scenario: 不支持 MCP 的引擎
 - **WHEN** 注册表存在启用的服务器，但任务使用的引擎 MCP 能力为 none
 - **THEN** 评审正常执行，不注入任何 MCP 配置，任务详情不展示 MCP 统计
 
+#### Scenario: 并发任务注入隔离
+- **WHEN** 仓库 R1（绑定 MCP 服务器 A）与仓库 R2（未绑定任何服务器）的评审任务并行执行
+- **THEN** R2 的评审配置中不含服务器 A，两任务的注入互不影响
+
+#### Scenario: 引擎版本过低降级
+- **WHEN** 任务的引擎运行时版本低于 MCP 注入所需最低版本
+- **THEN** 评审跳过 MCP 注入正常执行，任务记录标注降级原因
+
 ### Requirement: 连通性测试
 
-平台 SHALL 提供 MCP 连通性测试：对 stdio 服务器启动进程完成 MCP initialize 握手并枚举 tools/list，对 http 服务器发起 initialize 请求；测试结果 MUST 展示握手成功/失败与工具清单，超时使用记录的 timeout_sec。测试 MUST 不改动注册表数据。
+平台 SHALL 提供 MCP 连通性测试：对 stdio 服务器启动进程完成 MCP initialize 握手并枚举 tools/list；对 http 服务器按 Streamable HTTP 语义（Accept 同时声明 application/json 与 text/event-stream）发起 initialize，成功后同样枚举 tools/list。测试结果 MUST 展示握手成功/失败与工具清单；initialize 成功而 tools/list 失败时 MUST 区分标注。超时使用记录的 timeout_sec。测试 MUST 不改动注册表数据。
 
 #### Scenario: 测试成功
-- **WHEN** 管理员对配置正确的 stdio 服务器点击测试
+- **WHEN** 管理员对配置正确的 stdio 或 http 服务器点击测试
 - **THEN** 展示握手成功与工具名称列表
 
 #### Scenario: 测试失败
@@ -44,15 +54,19 @@
 
 ### Requirement: 调用审计
 
-每次评审任务 MUST 记录其 MCP 使用情况：注入了哪些服务器、评审过程中各工具的调用次数与失败次数（引擎输出含该统计时直接采集）。审计记录 SHALL 可在任务详情查看。平台自身的常规 API 访问日志不要求覆盖 MCP 进程内部行为。
+每次评审任务 MUST 持久化记录其 MCP 使用情况：注入了哪些服务器、各服务器的工具白名单是否被强制，为必记录项；评审过程中各工具的调用次数与失败次数在引擎输出包含该统计时 MUST 采集，引擎未上报时 MUST 在任务记录标注「引擎未上报工具统计」。审计记录 SHALL 在任务详情查看，且 MUST 不依赖运行日志的滚动保留（落库存储）。平台自身的常规 API 访问日志不要求覆盖 MCP 进程内部行为。
 
 #### Scenario: 任务详情展示 MCP 统计
 - **WHEN** 一次注入了 MCP 的评审完成且引擎输出包含工具调用统计
 - **THEN** 任务详情展示各工具调用次数与失败次数
 
+#### Scenario: 引擎未上报统计
+- **WHEN** 一次注入了 MCP 的评审完成，但引擎输出不含工具调用统计
+- **THEN** 任务详情展示注入服务器清单与「引擎未上报工具统计」标注
+
 ### Requirement: 管理员权限边界
 
-MCP 注册表的创建、修改、删除、启停、测试 MUST 仅限已登录管理员；非管理员请求 MUST 被拒绝。控制台 MCP 页面 SHALL 明示风险提示（MCP 服务器以当前服务账号权限执行任意命令，仅应添加可信来源）。评审执行进程意外失败时，MCP 注入信息 MUST 仍保留在任务记录中以便排障。
+MCP 注册表的创建、修改、删除、启停、测试 MUST 仅限已登录管理员；非管理员请求 MUST 被拒绝。控制台 MCP 页面 SHALL 明示风险提示（MCP 服务器以当前服务账号权限执行任意命令，仅应添加可信来源）。评审执行进程意外失败时，MCP 注入信息 MUST 仍保留在任务记录中以便排障。连接配置可能包含敏感值（http headers、stdio env 中的凭据）：API 与控制台回显配置时 MUST 对敏感字段值脱敏（保留键名），完整值仅用于注入与连通性测试。
 
 #### Scenario: 非管理员拒绝
 - **WHEN** 未登录会话请求修改 MCP 服务器
@@ -61,3 +75,7 @@ MCP 注册表的创建、修改、删除、启停、测试 MUST 仅限已登录�
 #### Scenario: 风险提示展示
 - **WHEN** 管理员打开 MCP 服务器管理页
 - **THEN** 页面展示任意命令执行风险说明
+
+#### Scenario: 敏感配置脱敏
+- **WHEN** 管理员查看一个 headers 含 Authorization 的 http 服务器记录
+- **THEN** 列表与详情接口返回脱敏后的值（保留键名），评审注入仍使用完整值

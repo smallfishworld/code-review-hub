@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
 import { readFileSync, existsSync } from 'node:fs';
+import { matchSuppressions } from '../memory/suppressFilter.js';
 
 /**
  * Parses ocr's JSON output and persists the report index.
@@ -86,6 +87,8 @@ export interface StoredReport {
   issueCount: number;
   rawPath: string;
   parsedOk: boolean;
+  /** Engine that produced the report (null = historical task). */
+  engine: string | null;
   createdAt: string;
 }
 
@@ -93,12 +96,17 @@ export interface StoredIssue {
   id: number;
   file: string | null;
   line: number | null;
+  /** Optional end line (engines that report a range). */
+  endLine: number | null;
   severity: string | null;
   /** ocr issue category (bug/security/performance/maintainability/…). */
   category: string | null;
   description: string;
   /** ocr's suggested replacement code, when provided. */
   suggestion: string | null;
+  /** Deterministic suppression marker + the memory entry that matched. */
+  suppressed: boolean;
+  suppressedBy: number | null;
 }
 
 function rowToReport(row: Record<string, unknown>): StoredReport {
@@ -108,6 +116,7 @@ function rowToReport(row: Record<string, unknown>): StoredReport {
     issueCount: row.issue_count as number,
     rawPath: row.raw_path as string,
     parsedOk: row.parsed_ok === 1,
+    engine: (row.engine as string | null) ?? null,
     createdAt: row.created_at as string,
   };
 }
@@ -116,8 +125,11 @@ export class ReportService {
   constructor(private readonly db: Database.Database) {}
 
   /**
-   * Parse the raw report file of a finished task and index it.
-   * Safe to call for failed tasks (no report file → no-op).
+   * Parse the raw report file of a finished task and index it, then apply
+   * deterministic suppression (project-memory spec): issues matching an
+   * active suppression fingerprint are flagged (suppressed=1 + suppressed_by)
+   * and excluded from issue_count. Safe to call for failed tasks (no report
+   * file → no-op).
    */
   indexTaskReport(taskId: number, rawPath: string): StoredReport | null {
     if (!existsSync(rawPath)) return null;
@@ -126,16 +138,78 @@ export class ReportService {
       raw = readFileSync(rawPath, 'utf8');
     } catch {
       // unreadable file: record as unparsed so the UI can flag it
-      return this.upsert(taskId, rawPath, null, 0, false);
+      return this.upsert(taskId, rawPath, null, 0, false, undefined, this.engineNameOf(taskId));
     }
 
     try {
       const parsed = parseOcrReport(raw);
-      return this.upsert(taskId, rawPath, parsed.summary, parsed.issueCount, true, parsed.comments);
+      const engineName = this.engineNameOf(taskId);
+      const stored = this.upsert(taskId, rawPath, parsed.summary, parsed.comments.length, true, parsed.comments, engineName);
+      const suppressedCount = this.applySuppression(taskId);
+      if (suppressedCount > 0 && stored) {
+        this.db
+          .prepare('UPDATE report SET issue_count = MAX(0, issue_count - ?) WHERE task_id = ?')
+          .run(suppressedCount, taskId);
+      }
+      return this.get(taskId);
     } catch {
       // succeeded-but-raw: keep the file, index as unparsed
-      return this.upsert(taskId, rawPath, `报告解析失败（原文已保留）: ${raw.slice(0, 200)}`, 0, false);
+      return this.upsert(
+        taskId,
+        rawPath,
+        `报告解析失败（原文已保留）: ${raw.slice(0, 200)}`,
+        0,
+        false,
+        undefined,
+        this.engineNameOf(taskId)
+      );
     }
+  }
+
+  /** Engine display name for a task (null → 历史任务，报告页显示 ocr（历史）). */
+  private engineNameOf(taskId: number): string | null {
+    const row = this.db
+      .prepare(
+        `SELECT e.name FROM task t JOIN engine e ON e.id = t.engine_id WHERE t.id = ?`
+      )
+      .get(taskId) as { name: string } | undefined;
+    return row?.name ?? null;
+  }
+
+  /**
+   * Deterministic suppression pass over a freshly indexed report: mark issues
+   * whose (file + category + description) fingerprint matches an active
+   * suppression memory. Returns the number of suppressed issues.
+   */
+  private applySuppression(taskId: number): number {
+    const report = this.get(taskId);
+    if (!report) return 0;
+    const issues = this.issues(taskId, { includeSuppressed: true });
+    if (issues.length === 0) return 0;
+    const task = this.db.prepare('SELECT repo_id FROM task WHERE id = ?').get(taskId) as
+      | { repo_id: number }
+      | undefined;
+    if (!task) return 0;
+    const matches = matchSuppressions(
+      this.db,
+      task.repo_id,
+      issues.map((i) => ({ file: i.file, category: i.category, description: i.description }))
+    );
+    const mark = this.db.prepare(
+      'UPDATE report_issue SET suppressed = 1, suppressed_by = ? WHERE id = ? AND suppressed = 0'
+    );
+    let count = 0;
+    const tx = this.db.transaction(() => {
+      issues.forEach((issue, idx) => {
+        const memoryId = matches[idx];
+        if (memoryId !== null && memoryId !== undefined) {
+          mark.run(memoryId, issue.id);
+          count++;
+        }
+      });
+    });
+    tx();
+    return count;
   }
 
   /** Insert or replace the report row + issue rows in one transaction. */
@@ -145,7 +219,8 @@ export class ReportService {
     summary: string | null,
     issueCount: number,
     parsedOk: boolean,
-    comments?: ReportComment[]
+    comments?: ReportComment[],
+    engineName: string | null = null
   ): StoredReport {
     const tx = this.db.transaction(() => {
       const existing = this.db.prepare('SELECT id FROM report WHERE task_id = ?').get(taskId) as
@@ -156,22 +231,23 @@ export class ReportService {
       }
       const info = this.db
         .prepare(
-          `INSERT INTO report (task_id, summary, issue_count, raw_path, parsed_ok)
-           VALUES (?, ?, ?, ?, ?)`
+          `INSERT INTO report (task_id, summary, issue_count, raw_path, parsed_ok, engine)
+           VALUES (?, ?, ?, ?, ?, ?)`
         )
-        .run(taskId, summary, issueCount, rawPath, parsedOk ? 1 : 0);
+        .run(taskId, summary, issueCount, rawPath, parsedOk ? 1 : 0, engineName);
       const reportId = Number(info.lastInsertRowid);
       if (comments) {
         const insertIssue = this.db
           .prepare(
-            `INSERT INTO report_issue (report_id, file, line, severity, category, description, suggestion)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`
+            `INSERT INTO report_issue (report_id, file, line, end_line, severity, category, description, suggestion)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
           );
         for (const c of comments) {
           insertIssue.run(
             reportId,
             c.path ?? null,
             c.startLine ?? c.endLine ?? null,
+            c.endLine ?? null,
             c.severity ?? null,
             c.category ?? null,
             c.content ?? '',
@@ -193,28 +269,50 @@ export class ReportService {
     return row ? rowToReport(row) : null;
   }
 
-  /** Issue list for a task's report. */
-  issues(taskId: number): StoredIssue[] {
+  /**
+   * Issue list for a task's report. Suppressed issues are hidden by default
+   * (报告视图与通知不含被抑制条目); report detail passes includeSuppressed.
+   */
+  issues(
+    taskId: number,
+    opts: { includeSuppressed?: boolean } = {}
+  ): StoredIssue[] {
     const row = this.db.prepare('SELECT id FROM report WHERE task_id = ?').get(taskId) as
       | { id: number }
       | undefined;
     if (!row) return [];
-    const rows = this.db
-      .prepare('SELECT * FROM report_issue WHERE report_id = ? ORDER BY id')
-      .all(row.id) as Record<string, unknown>[];
+    const rows = (
+      opts.includeSuppressed
+        ? this.db
+            .prepare('SELECT * FROM report_issue WHERE report_id = ? ORDER BY id')
+            .all(row.id)
+        : this.db
+            .prepare(
+              'SELECT * FROM report_issue WHERE report_id = ? AND suppressed = 0 ORDER BY id'
+            )
+            .all(row.id)
+    ) as Record<string, unknown>[];
     return rows.map((r) => ({
       id: r.id as number,
       file: (r.file as string | null) ?? null,
       line: (r.line as number | null) ?? null,
+      endLine: (r.end_line as number | null) ?? null,
       severity: (r.severity as string | null) ?? null,
       category: (r.category as string | null) ?? null,
       description: r.description as string,
       suggestion: (r.suggestion as string | null) ?? null,
+      suppressed: r.suppressed === 1,
+      suppressedBy: (r.suppressed_by as number | null) ?? null,
     }));
   }
 
   /** Full detail: index row + parsed issues + raw JSON text. */
-  detail(taskId: number): { report: StoredReport; issues: StoredIssue[]; raw: string | null } | null {
+  detail(taskId: number): {
+    report: StoredReport;
+    issues: StoredIssue[];
+    suppressedIssues: StoredIssue[];
+    raw: string | null;
+  } | null {
     const report = this.get(taskId);
     if (!report) return null;
     let raw: string | null;
@@ -223,6 +321,12 @@ export class ReportService {
     } catch {
       raw = null;
     }
-    return { report, issues: this.issues(taskId), raw };
+    const all = this.issues(taskId, { includeSuppressed: true });
+    return {
+      report,
+      issues: all.filter((i) => !i.suppressed),
+      suppressedIssues: all.filter((i) => i.suppressed),
+      raw,
+    };
   }
 }

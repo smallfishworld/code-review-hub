@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import Fastify from 'fastify';
 import { openDatabase } from '../db/database.js';
 import { SecretStore } from '../crypto/secrets.js';
@@ -50,13 +50,15 @@ afterEach(async () => {
 
 function makeGitOrigin(nCommits = 4): { origin: string; shas: string[] } {
   const origin = join(dir, 'origin.git');
-  execSync(`git init -b main ${JSON.stringify(origin)}`);
-  execSync('git config user.email t@t && git config user.name t', { cwd: origin });
+  execFileSync('git', ['init', '-b', 'main', origin]);
+  execFileSync('git', ['config', 'user.email', 't@t'], { cwd: origin });
+  execFileSync('git', ['config', 'user.name', 't'], { cwd: origin });
   const shas: string[] = [];
   for (let i = 1; i <= nCommits; i++) {
     writeFileSync(join(origin, `f${i}.txt`), `content ${i}`);
-    execSync('git add . && git commit -m c' + i, { cwd: origin });
-    shas.push(execSync('git rev-parse HEAD', { cwd: origin }).toString().trim());
+    execFileSync('git', ['add', '.'], { cwd: origin });
+    execFileSync('git', ['commit', '-m', `c${i}`], { cwd: origin });
+    shas.push(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: origin, encoding: 'utf8' }).toString().trim());
   }
   return { origin, shas };
 }
@@ -81,15 +83,15 @@ function makeSvnRepo(commits: { author: string; file: string }[]): {
   revisions: number[];
 } {
   const repoDir = join(dir, 'svnrepo');
-  execSync(`svnadmin create ${JSON.stringify(repoDir)}`);
+  execFileSync('svnadmin', ['create', repoDir]);
   const url = `file:///${repoDir.replace(/\\/g, '/').replace(/^\/+/, '')}`;
   const wc = join(dir, 'svnwc');
-  execSync(`svn checkout ${JSON.stringify(url)} ${JSON.stringify(wc)}`);
+  execFileSync('svn', ['checkout', url, wc]);
   const revisions: number[] = [];
   for (const c of commits) {
     writeFileSync(join(wc, c.file), `content ${revisions.length + 1}`);
-    execSync('svn add --force .', { cwd: wc });
-    const out = execSync(`svn commit -m msg --username ${c.author}`, { cwd: wc }).toString();
+    execFileSync('svn', ['add', '--force', '.'], { cwd: wc });
+    const out = execFileSync('svn', ['commit', '-m', 'msg', '--username', c.author], { cwd: wc, encoding: 'utf8' }).toString();
     revisions.push(Number(/Committed revision (\d+)/.exec(out)![1]));
   }
   return { url, revisions };

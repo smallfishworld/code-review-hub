@@ -36,7 +36,7 @@
 
 ### Requirement: 评审执行与输出归一化
 
-平台 SHALL 通过统一的引擎接口执行评审：准备/更新工作副本、执行评审、归一化输出。各引擎的私有输出格式 MUST 被归一化为平台统一的 issue 模型（文件路径、起止行号、severity（critical/high/medium/low 或空）、category（bug/security/performance/maintainability/test/style/documentation/other 或空）、描述、修复建议）。归一化 MUST 容错：单条 issue 字段缺失或类型错误不得导致整个报告解析失败。
+平台 SHALL 通过统一的引擎接口执行评审：准备/更新工作副本、执行评审、归一化输出。各引擎的私有输出格式 MUST 被归一化为平台统一的 issue 模型（文件路径、行号——起始行必填、结束行在引擎提供时可选携带、severity（critical/high/medium/low 或空）、category（bug/security/performance/maintainability/test/style/documentation/other 或空）、描述、修复建议）。归一化 MUST 容错：单条 issue 字段缺失或类型错误不得导致整个报告解析失败。
 
 #### Scenario: ocr 引擎产出归一化报告
 - **WHEN** ocr 引擎完成一次评审并输出其原生 JSON
@@ -56,8 +56,12 @@
 
 ### Requirement: ocr 适配器行为保持
 
-ocr 引擎适配器 MUST 保持现有对外行为：SVN 按 `--commit <rev>` 评审单节点、Git 按 commit sha 评审、区间任务逐节点展开、隔离 HOME 与 LLM Provider 注入、中文报告语言、SVN 证书与凭据处理、JSON 报告解析。迁移到适配器结构后，现有冒烟流程 MUST 全部通过。
+ocr 引擎适配器 MUST 保持现有对外行为：SVN 按 `--commit <rev>` 评审单节点、Git 按 commit sha 评审、区间任务逐节点展开、LLM Provider 注入与中文报告语言、SVN 证书与凭据处理、JSON 报告解析。隔离 HOME 的粒度从全平台共享调整为按仓库隔离：跨仓库并发任务 MUST 使用各自独立的运行 HOME（含 SVN 证书与凭据配置），互不污染；同仓库任务串行复用其 HOME。迁移到适配器结构后，现有冒烟流程 MUST 全部通过。
 
 #### Scenario: 迁移后行为回归
 - **WHEN** ocr 逻辑迁移为引擎适配器后运行跨平台冒烟
 - **THEN** 冒烟各阶段（仓库配置、手动评审、报告、通知、自动监控、重启恢复）全部通过，行为与迁移前一致
+
+#### Scenario: 跨仓库并发隔离
+- **WHEN** 两个不同仓库的评审任务并行执行
+- **THEN** 各自使用独立的 ocr HOME，任一任务的配置写入不影响另一任务

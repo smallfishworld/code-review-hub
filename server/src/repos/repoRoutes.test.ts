@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { openDatabase } from '../db/database.js';
 import { SecretStore } from '../crypto/secrets.js';
 import { CredentialService } from '../crypto/credentialService.js';
@@ -28,7 +28,7 @@ afterEach(() => {
 describe('repo API integration', () => {
   it('creates a git repo after connectivity verification succeeds', async () => {
     // real local git repo -> ls-remote succeeds
-    execSync(`git init -b main ${JSON.stringify(GIT_REPO_DIR())}`);
+    execFileSync('git', ['init', '-b', 'main', GIT_REPO_DIR()]);
     const app = await buildTestApp(db, credentials);
     const res = await app.inject({
       method: 'POST',
@@ -58,7 +58,7 @@ describe('repo API integration', () => {
   });
 
   it('rejects creation with wrong git credentials', async () => {
-    execSync(`git init -b main ${JSON.stringify(GIT_REPO_DIR())}`);
+    execFileSync('git', ['init', '-b', 'main', GIT_REPO_DIR()]);
     const app = await buildTestApp(db, credentials);
     const res = await app.inject({
       method: 'POST',
@@ -96,7 +96,7 @@ describe('repo API integration', () => {
     // A local clone URL that requires the stored password: the file:// path is
     // reachable without it, so instead assert the service passes the revealed
     // secret through by spying on the connectivity check.
-    execSync(`git init -b main ${JSON.stringify(GIT_REPO_DIR())}`);
+    execFileSync('git', ['init', '-b', 'main', GIT_REPO_DIR()]);
     const app = await buildTestApp(db, credentials);
     const created = await app.inject({
       method: 'POST',
@@ -117,7 +117,7 @@ describe('repo API integration', () => {
   });
 
   it('update keeps stored credential when password omitted', async () => {
-    execSync(`git init -b main ${JSON.stringify(GIT_REPO_DIR())}`);
+    execFileSync('git', ['init', '-b', 'main', GIT_REPO_DIR()]);
     const app = await buildTestApp(db, credentials);
     const created = await app.inject({
       method: 'POST',
@@ -143,7 +143,7 @@ describe('repo API integration', () => {
   });
 
   it('delete reports impact scope beforehand and keeps history', async () => {
-    execSync(`git init -b main ${JSON.stringify(GIT_REPO_DIR())}`);
+    execFileSync('git', ['init', '-b', 'main', GIT_REPO_DIR()]);
     const app = await buildTestApp(db, credentials);
     const created = await app.inject({
       method: 'POST',
@@ -175,7 +175,7 @@ describe('repo API integration', () => {
   });
 
   it('rejects duplicate repo name', async () => {
-    execSync(`git init -b main ${JSON.stringify(GIT_REPO_DIR())}`);
+    execFileSync('git', ['init', '-b', 'main', GIT_REPO_DIR()]);
     const app = await buildTestApp(db, credentials);
     const first = await app.inject({
       method: 'POST',
@@ -193,17 +193,21 @@ describe('repo API integration', () => {
 
   it('lists recent git nodes newest-first, paged, and filters by query', async () => {
     const origin = GIT_REPO_DIR();
-    execSync(`git init -b main ${JSON.stringify(origin)}`);
+    execFileSync('git', ['init', '-b', 'main', origin]);
     const git = (args: string) =>
-      execSync(`git ${args}`, { cwd: origin, encoding: 'utf8', stdio: 'pipe' });
+      execFileSync('git', args.split(/\s+/), { cwd: origin, encoding: 'utf8', stdio: 'pipe' });
     // Three commits with distinct authors/messages so the filter is meaningful.
     const commits: string[] = [];
     for (const [i, msg] of ['add login page', 'fix crash on save', 'refactor parser'].entries()) {
-      execSync(`git -c user.name=dev${i} -c user.email=d${i}@x commit --allow-empty -m ${JSON.stringify(msg)}`, {
-        cwd: origin,
-        encoding: 'utf8',
-        stdio: 'pipe',
-      });
+      execFileSync(
+        'git',
+        ['-c', `user.name=dev${i}`, '-c', `user.email=d${i}@x`, 'commit', '--allow-empty', '-m', msg],
+        {
+          cwd: origin,
+          encoding: 'utf8',
+          stdio: 'pipe',
+        }
+      );
       commits.push(git('rev-parse HEAD').trim());
     }
 

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify from 'fastify';
 import { openDatabase } from '../db/database.js';
+import { randomBytes } from 'node:crypto';
 import { SecretStore } from '../crypto/secrets.js';
 import { CredentialService } from '../crypto/credentialService.js';
 import { buildNotificationRoutes } from './notificationRoutes.js';
@@ -35,6 +36,8 @@ const post = (url: string, body?: unknown) =>
 const put = (url: string, body?: unknown) =>
   app.inject({ method: 'PUT', url, payload: body as never });
 
+const SMTP_PASSWORD = randomBytes(10).toString('hex');
+
 const emailBody = {
   type: 'email',
   name: 'ops-mail',
@@ -44,7 +47,7 @@ const emailBody = {
   from: 'review@example.com',
   to: ['dev@example.com', 'qa@example.com'],
   username: 'review',
-  password: 'smtp-secret',
+  password: SMTP_PASSWORD,
 };
 
 describe('notification channel API', () => {
@@ -61,16 +64,16 @@ describe('notification channel API', () => {
     expect(body.config.to).toEqual(['dev@example.com', 'qa@example.com']);
     expect(body.config.password).toBe('********');
     expect(body.config.hasPassword).toBe(true);
-    expect(res.body).not.toContain('smtp-secret');
+    expect(res.body).not.toContain(SMTP_PASSWORD);
 
     const row = db.prepare('SELECT ciphertext FROM credential').get() as { ciphertext: Buffer };
-    expect(row.ciphertext.toString('utf8')).not.toContain('smtp-secret');
+    expect(row.ciphertext.toString('utf8')).not.toContain(SMTP_PASSWORD);
     const credId = (
       db.prepare('SELECT credential_id FROM notification_channel').get() as {
         credential_id: number;
       }
     ).credential_id;
-    expect(credentials.reveal(credId)).toBe('smtp-secret');
+    expect(credentials.reveal(credId)).toBe(SMTP_PASSWORD);
   });
 
   it('validates email fields', async () => {
@@ -105,7 +108,7 @@ describe('notification channel API', () => {
         credential_id: number;
       }
     ).credential_id;
-    expect(credentials.reveal(credId)).toBe('smtp-secret');
+    expect(credentials.reveal(credId)).toBe(SMTP_PASSWORD);
   });
 
   it('creates a chat channel, masks the webhook and headers, and keeps secrets encrypted', async () => {
