@@ -12,7 +12,8 @@ import {
   getMcpServer,
   McpConfigError,
 } from './service.js';
-import { collectEffectiveServers, buildOcrMcpServers } from './injector.js';
+import { collectEffectiveServers, buildOcrMcpServers, ensureBuiltinMemoryQuery, bridgeScriptPath, recordMcpInjection } from './injector.js';
+import { BUILTIN_MEMORY_QUERY } from '../memory/mcpBridge.js';
 import type Database from 'better-sqlite3';
 
 let dir: string;
@@ -121,8 +122,7 @@ describe('mcp service validation', () => {
     expect(names).toEqual(['g1', 'r1']);
   });
 
-  it('buildOcrMcpServers maps stdio and http shapes (env as KEY=VALUE array per ocr Go struct)', () => {
-    const mapped = buildOcrMcpServers([
+  it('buildOcrMcpServers maps stdio and http shapes (env as KEY=VALUE array per ocr Go struct)', () => {    const mapped = buildOcrMcpServers([
       { id: 1, name: 'cg', transport: 'stdio', config: { command: 'codegraph', args: ['serve'] }, toolAllowlist: null },
       {
         id: 2,
@@ -158,5 +158,57 @@ describe('mcp service validation', () => {
     expect((masked.headers as Record<string, string>)['X-Api-Key']).toBe('********');
     expect((masked.headers as Record<string, string>).Accept).toBe('json');
     expect(masked.command).toBe('run');
+  });
+});
+
+describe('builtin memory.query server', () => {
+  it('ensureBuiltinMemoryQuery creates the system row once and refreshes config', () => {
+    ensureBuiltinMemoryQuery(db);
+    ensureBuiltinMemoryQuery(db); // 幂等
+    const rows = db
+      .prepare('SELECT * FROM mcp_server WHERE name = ?')
+      .all(BUILTIN_MEMORY_QUERY) as { id: number; config: string }[];
+    expect(rows).toHaveLength(1);
+    const cfg = JSON.parse(rows[0].config) as { command: string; args: string[] };
+    expect(cfg.command).toBe('node');
+    expect(cfg.args[0]).toBe(bridgeScriptPath());
+    expect(bridgeScriptPath()).toContain('memory-mcp-bridge');
+
+    // 用户唯一可控的是 enabled：停用后不再进入生效集合
+    db.prepare('UPDATE mcp_server SET enabled = 0 WHERE id = ?').run(rows[0].id);
+    expect(collectEffectiveServers(db, 1).map((s) => s.name)).not.toContain(BUILTIN_MEMORY_QUERY);
+    db.prepare('UPDATE mcp_server SET enabled = 1 WHERE id = ?').run(rows[0].id);
+    expect(collectEffectiveServers(db, 1).map((s) => s.name)).toContain(BUILTIN_MEMORY_QUERY);
+  });
+
+  it('buildOcrMcpServers injects per-task env (dataDir + repoId) into the builtin server', () => {
+    ensureBuiltinMemoryQuery(db);
+    // 一个用户服务器 + 内置服务器并存
+    createMcpServer(db, {
+      name: 'codegraph',
+      transport: 'stdio',
+      config: { command: 'codegraph', args: ['serve'] },
+    });
+    const servers = collectEffectiveServers(db, 1);
+    const mapped = buildOcrMcpServers(servers, { dataDir: '/tmp/crp-e2e/data', repoId: 7 });
+    const builtin = mapped[BUILTIN_MEMORY_QUERY] as { env: string[]; command: string };
+    expect(builtin.command).toBe('node');
+    expect(builtin.env).toEqual(['CRP_DATA_DIR=/tmp/crp-e2e/data', 'CRP_REPO_ID=7']);
+    // 用户服务器不受 ctx 影响
+    const user = mapped.codegraph as { env: string[] };
+    expect(user.env).toEqual([]);
+  });
+
+  it('builtin injection is audited like any other server (task_mcp_injection)', () => {
+    ensureBuiltinMemoryQuery(db);
+    const servers = collectEffectiveServers(db, 1);
+    db.prepare(
+      "INSERT INTO task (id, repo_id, node, trigger, status) VALUES (1, 1, '1', 'manual', 'succeeded')"
+    ).run();
+    recordMcpInjection(db, 1, servers);
+    const audit = db
+      .prepare('SELECT server_name FROM task_mcp_injection WHERE task_id = 1 ORDER BY server_id')
+      .all() as { server_name: string }[];
+    expect(audit.map((a) => a.server_name)).toContain(BUILTIN_MEMORY_QUERY);
   });
 });

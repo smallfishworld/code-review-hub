@@ -52,15 +52,17 @@ export interface RepoAuthInfo {
 
 /**
  * Engine-boundary validation for admin-configured repo fields (policy:
- * securityInvariants). URLs must carry a known VCS protocol and contain no
- * control characters (argv is shell-free, but the boundary check keeps the
- * taint chain observable and stops stray whitespace/NEWLINE tricks).
+ * securityInvariants). URLs must carry a known VCS protocol or be absolute
+ * filesystem paths (local repos are a supported use case), and must contain
+ * no control characters (argv is shell-free, but the boundary check keeps
+ * the taint chain observable and stops stray whitespace/NEWLINE tricks).
  */
 const VCS_URL_RE = /^(?:file|http|https|svn|svn\+ssh|git|ssh):\/\/[\x21-\x7e]+$/;
+const LOCAL_PATH_RE = /^(?:[A-Za-z]:)?[/\\][\x20-\x7e]+$/;
 const SAFE_USERINFO_RE = /^[\x20-\x7e]{0,200}$/;
 
 function assertSafeRepoAuth(auth: RepoAuthInfo): RepoAuthInfo {
-  if (!VCS_URL_RE.test(auth.url)) {
+  if (!VCS_URL_RE.test(auth.url) && !LOCAL_PATH_RE.test(auth.url)) {
     throw new Error(`仓库地址协议或格式不受支持: ${auth.url.slice(0, 60)}`);
   }
   for (const [label, value] of [

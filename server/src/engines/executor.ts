@@ -99,7 +99,10 @@ export class EngineExecutor {
       if (engine.capabilities.mcp === 'config-inject' && !probe.degraded.includes('mcp')) {
         const servers = collectEffectiveServers(this.db, task.repoId);
         if (servers.length > 0) {
-          mcpServers = buildOcrMcpServers(servers);
+          mcpServers = buildOcrMcpServers(servers, {
+            dataDir: this.opts.dataDir,
+            repoId: task.repoId,
+          });
           recordMcpInjection(this.db, task.id, servers);
           this.opts.logs?.info('task', `#${task.id} 注入 ${servers.length} 个 MCP 服务器`);
         }

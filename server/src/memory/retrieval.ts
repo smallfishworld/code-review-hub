@@ -53,11 +53,7 @@ export class MemoryRetrieval {
     }
 
     // 3) score + budget truncation
-    const now = Date.now();
-    const scored = [...candidates.values()].map((e) => ({
-      entry: e,
-      score: e.confidence * recency(e.updatedAt, now) * Math.log2(2 + e.hits),
-    }));
+    const scored = rankEntries([...candidates.values()], Date.now());
     scored.sort((a, b) => b.score - a.score);
 
     const picked: MemoryEntry[] = [];
@@ -132,6 +128,17 @@ function recency(updatedAt: string, now: number): number {
   const ageMs = now - new Date(updatedAt).getTime();
   const days = Math.max(0, ageMs / 86_400_000);
   return Math.pow(0.5, days / 90);
+}
+
+/** Canonical ranking (confidence × recency × hits) — shared by injection and the MCP bridge. */
+export function rankEntries(
+  entries: MemoryEntry[],
+  now: number
+): { entry: MemoryEntry; score: number }[] {
+  return entries.map((entry) => ({
+    entry,
+    score: entry.confidence * recency(entry.updatedAt, now) * Math.log2(2 + entry.hits),
+  }));
 }
 
 /** Mixed-script token estimate: ASCII/4 + non-ASCII x1.5. */

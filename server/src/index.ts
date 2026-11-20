@@ -13,6 +13,7 @@ import { EngineExecutor } from './engines/executor.js';
 import { bootstrapEngines } from './engines/registry.js';
 import { buildEngineRoutes } from './engines/routes.js';
 import { buildMcpRoutes } from './mcp/routes.js';
+import { ensureBuiltinMemoryQuery } from './mcp/injector.js';
 import { buildMemoryRoutes } from './memory/routes.js';
 import { MonitorService } from './monitor/monitorService.js';
 import { buildMonitorRoutes } from './monitor/monitorRoutes.js';
@@ -78,6 +79,7 @@ async function main() {
   const db = openDatabase({ dataDir });
   const credentials = new CredentialService(db, new SecretStore(join(dataDir, 'keys')));
   bootstrapEngines(db); // 幂等：空库插入默认 ocr 引擎并设为全局默认
+  ensureBuiltinMemoryQuery(db); // 幂等：内置记忆查询 MCP 桥（system 行，管理员可停用）
   const engineExecutor = new EngineExecutor(db, credentials, { dataDir, logs });
   const queue = new TaskQueue(db, engineExecutor.execute, 2, logs);
 

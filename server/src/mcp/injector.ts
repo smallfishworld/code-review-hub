@@ -1,4 +1,7 @@
 import type Database from 'better-sqlite3';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { BUILTIN_MEMORY_QUERY } from '../memory/mcpBridge.js';
 
 /**
  * MCP injection for a review task (openspec mcp-integration spec).
@@ -71,16 +74,27 @@ export function collectEffectiveServers(
  * "KEY=VALUE") — NOT an object; args is a plain string array.
  * Empty map when there is nothing to inject — the caller then writes the
  * provider-only config.
+ *
+ * `ctx` (dataDir + repoId) is required so the builtin memory.query server can
+ * be handed its per-task scope via env — the tool parameters never carry a
+ * repo identifier (project-memory spec: 记忆查询 MCP 桥).
  */
-export function buildOcrMcpServers(servers: EffectiveMcpServer[]): Record<string, unknown> {
+export function buildOcrMcpServers(
+  servers: EffectiveMcpServer[],
+  ctx?: { dataDir: string; repoId: number }
+): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const s of servers) {
     if (s.transport === 'stdio') {
       const env = (s.config.env ?? {}) as Record<string, unknown>;
+      const envEntries = Object.entries(env).map(([k, v]) => `${k}=${String(v)}`);
+      if (ctx && s.name === BUILTIN_MEMORY_QUERY) {
+        envEntries.push(`CRP_DATA_DIR=${ctx.dataDir}`, `CRP_REPO_ID=${String(ctx.repoId)}`);
+      }
       out[s.name] = {
         command: s.config.command,
         args: s.config.args ?? [],
-        env: Object.entries(env).map(([k, v]) => `${k}=${String(v)}`),
+        env: envEntries,
         enabled: true,
       };
     } else {
@@ -93,6 +107,39 @@ export function buildOcrMcpServers(servers: EffectiveMcpServer[]): Record<string
     }
   }
   return out;
+}
+
+/** Absolute path of the compiled bridge script (sibling of this module). */
+export function bridgeScriptPath(importerUrl = import.meta.url): string {
+  const here = dirname(fileURLToPath(importerUrl));
+  return resolve(here, '../memory-mcp-bridge.js');
+}
+
+/**
+ * Ensure the builtin memory.query MCP server row exists (project-memory spec:
+ * 记忆查询 MCP 桥 / mcp-integration spec: 内置记忆查询桥的自动附加). The row is
+ * system-owned: config (command/args) is refreshed to the current build on
+ * every platform start; the only user-controllable field is `enabled`
+ * (flipping it off disables auto-attach). Called once at platform startup.
+ */
+export function ensureBuiltinMemoryQuery(db: Database.Database): void {
+  const config = JSON.stringify({
+    command: 'node',
+    args: [bridgeScriptPath()],
+    env: {},
+  });
+  const existing = db
+    .prepare('SELECT id, config FROM mcp_server WHERE name = ?')
+    .get(BUILTIN_MEMORY_QUERY) as { id: number; config: string } | undefined;
+  if (!existing) {
+    db.prepare(
+      `INSERT INTO mcp_server (name, transport, config, enabled, scope, timeout_sec)
+       VALUES (?, 'stdio', ?, 1, 'global', 15)`
+    ).run(BUILTIN_MEMORY_QUERY, config);
+    return;
+  }
+  // Track dist moves / version bumps: keep the system row's command current.
+  db.prepare('UPDATE mcp_server SET config = ? WHERE id = ?').run(config, existing.id);
 }
 
 /** Persist the injection record for a task (call after task row exists). */
