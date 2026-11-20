@@ -15,6 +15,8 @@ import {
 } from '../providers/ocrProviderConfig.js';
 import { parseOcrReport } from '../tasks/reportService.js';
 import { probeDependency } from '../deps/detector.js';
+import { locateCommand } from '../deps/which.js';
+import { runCapture } from '../providers/providerTester.js';
 import type {
   EngineCapabilities,
   EngineProbe,
@@ -115,7 +117,7 @@ export class OcrEngine implements ReviewEngine {
     });
   }
 
-  /** Resolve the ocr binary + version; gate MCP/memory below 1.13. */
+  /** Resolve the ocr binary + version; gate MCP/memory on observed support. */
   async probe(): Promise<EngineProbe> {
     // Reuse the shipped dependency probe (deps/detector.ts) — it resolves the
     // binary via which() and runs `ocr --version` safely.
@@ -128,6 +130,23 @@ export class OcrEngine implements ReviewEngine {
     const version = dep.version?.match(/(\d+\.\d+\.\d+)/)?.[1] ?? dep.version;
     if (version && compareVersion(version, this.capabilities.minVersion ?? '0.0.0') < 0) {
       this.degraded = [...VERSION_GATED];
+    }
+    // Runtime capability check: memory injection needs `--background-file`
+    // (1.13.x exposes requirement context as --background / --background-file,
+    // NOT --requirement). Probe the review help text empirically.
+    try {
+      const located = await locateCommand('ocr');
+      if (located.path) {
+        const help = await runCapture(located.path, ['review', '--help'], {
+          env: process.env as Record<string, string>,
+          timeoutMs: 15_000,
+        });
+        if (!help.output.includes('--background-file')) {
+          if (!this.degraded.includes('memory')) this.degraded.push('memory');
+        }
+      }
+    } catch {
+      // help probe failed: keep version-based gating only
     }
     return { ok: true, degraded: [...this.degraded], version };
   }
@@ -176,6 +195,14 @@ export class OcrEngine implements ReviewEngine {
     homeEnv: Record<string, string>
   ): Promise<PrepareResult> {
     const wcDir = workCopyDir(this.opts.dataDir, ctx.task.repoId);
+    // svn diff --summarize prints ABSOLUTE paths when given an absolute
+    // target; memory scope matching expects wc-relative paths, so normalize
+    // everything (git diff-tree already prints repo-relative).
+    const normalize = (p: string): string => {
+      const norm = p.replace(/\\/g, '/').replace(/^[AMDR?!\s]+\s*/, '').trim();
+      const wcPrefix = wcDir.replace(/\\/g, '/') + '/';
+      return norm.startsWith(wcPrefix) ? norm.slice(wcPrefix.length) : norm;
+    };
     if (ctx.auth.type === 'svn') {
       const rev = validatedNode('svn', ctx.task.node);
       const out = await runSvn(
@@ -185,7 +212,7 @@ export class OcrEngine implements ReviewEngine {
       );
       const files = out.stdout
         .split(/\r?\n/)
-        .map((l) => l.replace(/^[AMDR?!\s]+\s*/, '').trim())
+        .map(normalize)
         .filter((l) => l.length > 0);
       return { changedFiles: files, identifiers: sampleIdentifiers(files, []) };
     }
@@ -274,16 +301,17 @@ export class OcrEngine implements ReviewEngine {
       reportPath,
     ];
 
-    // Memory context via --requirement (skipped when version-gated). Prefer a
-    // temp file (no command-line length/escaping issues); fall back to inline
-    // text when the installed ocr rejects the file form.
+    // Memory context (skipped when unsupported): real ocr 1.13.x exposes
+    // requirement context as `--background-file <md>` — prefer the file form
+    // (no command-line length/escaping issues) and fall back to inline
+    // `--background <text>` when the file form is unavailable.
     const useRequirement = Boolean(req.requirementText) && !this.degraded.includes('memory');
     let tmpDir: string | null = null;
     if (useRequirement) {
       tmpDir = mkdtempSync(join(tmpdir(), 'crp-req-'));
-      const file = join(tmpDir, 'requirement.md');
+      const file = join(tmpDir, 'background.md');
       writeFileSync(file, req.requirementText!, 'utf8');
-      args.push('--requirement', file);
+      args.push('--background-file', file);
     }
 
     try {
@@ -291,7 +319,7 @@ export class OcrEngine implements ReviewEngine {
       if (result.exitCode === 0 || !useRequirement) return result;
       // File form unsupported -> retry once with inline text (design D4).
       const inlineArgs = args.slice(0, -2);
-      inlineArgs.push('--requirement', req.requirementText!.slice(0, 6000));
+      inlineArgs.push('--background', req.requirementText!.slice(0, 6000));
       const retry = await this.runOcrWithConfig(inlineArgs, ctx, req.mcpServers ?? null);
       return retry.exitCode === 0 ? retry : result;
     } finally {

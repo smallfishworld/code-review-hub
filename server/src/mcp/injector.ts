@@ -66,8 +66,9 @@ export function collectEffectiveServers(
 }
 
 /**
- * Build the ocr config.json `mcp_servers` section (ocr >= 1.13 format:
- * mcp_servers.<name>.<command|args|env|url|headers|enabled|type>).
+ * Build the ocr config.json `mcp_servers` section. Verified against the real
+ * ocr 1.13.8-svn.1 Go struct: `mcp_servers.<name>.env` is []string (each entry
+ * "KEY=VALUE") — NOT an object; args is a plain string array.
  * Empty map when there is nothing to inject — the caller then writes the
  * provider-only config.
  */
@@ -75,10 +76,11 @@ export function buildOcrMcpServers(servers: EffectiveMcpServer[]): Record<string
   const out: Record<string, unknown> = {};
   for (const s of servers) {
     if (s.transport === 'stdio') {
+      const env = (s.config.env ?? {}) as Record<string, unknown>;
       out[s.name] = {
         command: s.config.command,
         args: s.config.args ?? [],
-        env: s.config.env ?? {},
+        env: Object.entries(env).map(([k, v]) => `${k}=${String(v)}`),
         enabled: true,
       };
     } else {

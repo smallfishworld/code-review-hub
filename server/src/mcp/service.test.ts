@@ -121,13 +121,27 @@ describe('mcp service validation', () => {
     expect(names).toEqual(['g1', 'r1']);
   });
 
-  it('buildOcrMcpServers maps stdio and http shapes', () => {
+  it('buildOcrMcpServers maps stdio and http shapes (env as KEY=VALUE array per ocr Go struct)', () => {
     const mapped = buildOcrMcpServers([
       { id: 1, name: 'cg', transport: 'stdio', config: { command: 'codegraph', args: ['serve'] }, toolAllowlist: null },
-      { id: 2, name: 'remote', transport: 'http', config: { url: 'https://x', headers: { a: 'b' } }, toolAllowlist: ['t1'] },
+      {
+        id: 2,
+        name: 'remote',
+        transport: 'http',
+        config: { url: 'https://x', headers: { a: 'b' } },
+        toolAllowlist: ['t1'],
+      },
+      {
+        id: 3,
+        name: 'with-env',
+        transport: 'stdio',
+        config: { command: 'mcp', env: { API_KEY: 'k', MODE: 'x' } },
+        toolAllowlist: null,
+      },
     ]);
-    expect(mapped.cg).toMatchObject({ command: 'codegraph', enabled: true });
+    expect(mapped.cg).toMatchObject({ command: 'codegraph', env: [], enabled: true });
     expect(mapped.remote).toMatchObject({ url: 'https://x', type: 'http', enabled: true });
+    expect(mapped['with-env'].env).toEqual(['API_KEY=k', 'MODE=x']);
   });
 
   it('updates and deletes; cascade removes repo-scoped rows with the repo', () => {
