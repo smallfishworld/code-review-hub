@@ -19,6 +19,7 @@ dist-mac/
 # only runtime state is ignored)
 .mimosa/hook-state/
 .mimosa/finding-ledger/
+.mimosa/reports/
 .mimosa/hook-status/
 .codegraph/
 web/.mimosa/
