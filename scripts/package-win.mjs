@@ -34,6 +34,7 @@ import {
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { verifyBundledCodeGraph } from './package-codegraph.mjs';
 import { createWriteStream } from 'node:fs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -76,8 +77,8 @@ const mb = (bytes) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 
 // ---------------------------------------------------------------- preflight
 log(`output: ${PKG_DIR}`);
-if (process.platform !== 'win32') {
-  fail('this packager builds a Windows bundle and must run on Windows');
+if (process.platform !== 'win32' || process.arch !== 'x64') {
+  fail('this packager requires a Windows x64 Node runtime');
 }
 
 // Build first so the package always contains current code.
@@ -158,6 +159,7 @@ for (const src of prodPaths) {
   cpSync(src, dest, { recursive: true });
 }
 log(`  ${prodPaths.length} packages`);
+log(`  bundled CodeGraph ${await verifyBundledCodeGraph(PKG_DIR)}`);
 
 // better-sqlite3 ships prebuilds for every platform; keep only win32-x64.
 const bs3Prebuilds = join(PKG_DIR, 'node_modules', 'better-sqlite3', 'prebuilds');
@@ -247,6 +249,7 @@ const readme = `# 代码评审平台（Windows 免安装包 v${pkgVersion}）
 | \`web/dist/\` | Web 控制台（由服务端直接托管） |
 | \`node_modules/\` | 生产依赖（已裁剪为 win32-x64） |
 | \`vendor/ocr/ocr.exe\` | ocr 评审 CLI（open-code-review v1.13.8-svn.1） |
+| \`node_modules/@colbymchenry/\` | 内置 CodeGraph MCP 与本地索引运行时 |
 | \`vendor/svn/bin/\` | 便携版 SVN 1.14.5${WITH_SVN ? '' : '（本包未内置，需自行安装 SVN >= 1.9 并加入 PATH）'} |
 | \`data/\` | 首次启动自动创建：数据库、密钥、工作副本、报告 |
 

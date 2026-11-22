@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BUILTIN_MEMORY_QUERY } from '../memory/mcpBridge.js';
+import { BUILTIN_CODEGRAPH, codeGraphBridgeArgs } from './codeGraph.js';
 
 /**
  * MCP injection for a review task (openspec mcp-integration spec).
@@ -81,11 +82,14 @@ export function collectEffectiveServers(
  */
 export function buildOcrMcpServers(
   servers: EffectiveMcpServer[],
-  ctx?: { dataDir: string; repoId: number }
+  ctx?: { dataDir: string; repoId: number; codeGraphArgs?: [string, string] }
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const s of servers) {
     if (s.transport === 'stdio') {
+      const builtinCodeGraph = isBuiltinCodeGraph(s);
+      const graphArgs = builtinCodeGraph ? ctx?.codeGraphArgs : undefined;
+      if (builtinCodeGraph && !graphArgs) continue;
       const env = (s.config.env ?? {}) as Record<string, unknown>;
       const envEntries = Object.entries(env).map(([k, v]) => `${k}=${String(v)}`);
       if (ctx && s.name === BUILTIN_MEMORY_QUERY) {
@@ -93,7 +97,7 @@ export function buildOcrMcpServers(
       }
       out[s.name] = {
         command: s.config.command,
-        args: s.config.args ?? [],
+        args: graphArgs ? [...codeGraphBridgeArgs(), ...graphArgs] : s.config.args ?? [],
         env: envEntries,
         enabled: true,
       };
@@ -107,6 +111,26 @@ export function buildOcrMcpServers(
     }
   }
   return out;
+}
+
+export function isBuiltinCodeGraph(server: Pick<EffectiveMcpServer, 'name' | 'config'>): boolean {
+  const args = server.config.args;
+  return server.name === BUILTIN_CODEGRAPH && Array.isArray(args) &&
+    args.some((arg) => typeof arg === 'string' && /[/\\]codegraph-mcp-bridge\.[jt]s$/.test(arg));
+}
+
+/** Register the default global MCP without replacing an administrator's existing configuration. */
+export function ensureBuiltinCodeGraph(db: Database.Database): void {
+  const config = JSON.stringify({ command: process.execPath, args: codeGraphBridgeArgs(), env: {} });
+  db.prepare(
+    `INSERT OR IGNORE INTO mcp_server (name, transport, config, enabled, scope, timeout_sec)
+     VALUES (?, 'stdio', ?, 1, 'global', 15)`
+  ).run(BUILTIN_CODEGRAPH, config);
+  const existing = db.prepare('SELECT config FROM mcp_server WHERE name = ? AND json_valid(config)')
+    .get(BUILTIN_CODEGRAPH) as { config: string } | undefined;
+  if (existing && isBuiltinCodeGraph({ name: BUILTIN_CODEGRAPH, config: JSON.parse(existing.config) })) {
+    db.prepare('UPDATE mcp_server SET config = ? WHERE name = ?').run(config, BUILTIN_CODEGRAPH);
+  }
 }
 
 /** Absolute path of the compiled bridge script (sibling of this module). */

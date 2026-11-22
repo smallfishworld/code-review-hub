@@ -157,6 +157,7 @@ export class OcrEngine implements ReviewEngine {
   /** Prepare the working copy at the task node + collect the change set. */
   async prepare(ctx: PrepareContext): Promise<PrepareResult> {
     const repoId = ctx.task.repoId;
+    const workspacePath = workCopyDir(this.opts.dataDir, repoId, ctx.task.sourceVersion);
     const home = ocrHomeDir(this.opts.dataDir, repoId, ctx.task.sourceVersion);
     // The ocr HOME must exist BEFORE the SVN credential-seeding checkout so
     // svn writes into the store the ocr child will read (see
@@ -180,7 +181,7 @@ export class OcrEngine implements ReviewEngine {
     }
 
     try {
-      return await this.collectChanges(ctx, homeEnv);
+      return { ...await this.collectChanges(ctx, homeEnv), workspacePath };
     } catch (err) {
       ctx.signal?.throwIfAborted();
       // Memory retrieval input is best-effort: never fail the review over it.
@@ -189,7 +190,7 @@ export class OcrEngine implements ReviewEngine {
         'task',
         `#${ctx.task.id} 变更文件采集失败（记忆检索降级为全文匹配）: ${reason}`
       );
-      return { changedFiles: [], identifiers: [] };
+      return { changedFiles: [], identifiers: [], workspacePath };
     }
   }
 

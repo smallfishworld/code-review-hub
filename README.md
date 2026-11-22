@@ -120,7 +120,7 @@ PORT=3000 DATA_DIR=/var/lib/codereview-hub npm start
 
 浏览器访问 `http://127.0.0.1:3000`。
 
-免安装打包（在 macOS 机器上执行，产物为 `dist-mac/codereview-hub-macos-<arch>-v*.tar.gz`，内置 Node 与 ocr，SVN 需目标机 `brew install subversion`）：
+免安装打包（用与目标架构一致的 Node 在 macOS 上执行，产物为 `dist-mac/codereview-hub-macos-<arch>-v*.tar.gz`，内置 Node、ocr 与 CodeGraph，SVN 需目标机 `brew install subversion`）：
 
 ```bash
 node scripts/package-mac.mjs [--arch arm64|x64]
@@ -162,7 +162,7 @@ data/
    - **仓库管理**：新增 SVN 或 Git 仓库（保存前会做连通性验证：`svn info` / `git ls-remote`，失败不保存）。
    - **LLM Provider**：API 地址 / 模型 / 协议 / Key，设为默认；可点「测试连接」。
    - **评审引擎**：首次启动自动注册默认 ocr 引擎并设为全局默认；可按需新增引擎、按仓库 / 监控规则覆盖（详见第 6 节）。
-   - **MCP 服务器**（可选）：注册 codegraph 等 MCP 服务器并绑定仓库，评审时自动注入（详见第 6 节）。
+   - **MCP 服务器**：内置 CodeGraph 默认启用。可按需注册其他服务器并绑定仓库（详见第 6 节）。
    - **通知配置**：邮件渠道、聊天机器人渠道，选择触发规则（全部完成 / 仅失败 / 仅成功）。
    - **监控规则**：轮询间隔（>= 30 秒）、人员白名单、路径前缀、回溯节点数，启用后开始轮询。
    - **手动触发 / 任务列表**：单节点或区间触发，查看任务状态与报告；报告 issue 行尾可标记「误报 / 已修复」喂给项目记忆。
@@ -245,7 +245,9 @@ data/
 
 ### 6.2 MCP 服务器
 
-平台统一管理 MCP 服务器并在评审时注入引擎配置，让评审智能体可以调用 MCP 工具加速上下文获取（典型用途：[codegraph](https://github.com/codegraph) 符号检索）。
+平台启动时默认注册 [CodeGraph](https://github.com/colbymchenry/codegraph)。Git / SVN 工作副本切到目标节点后，平台先初始化或同步本地索引，再向支持 MCP 的评审引擎提供 `codegraph_explore`。查询范围限定为当前任务的工作副本。索引失败会记录原因，本次评审继续执行。
+
+CodeGraph 随 npm 生产依赖安装，macOS 和 Windows 免安装包包含对应平台的运行时。打包时请安装 npm 可选依赖。目标机器无需单独安装 CodeGraph，评审时也无需下载运行时。管理员可在「MCP 服务器」页停用 `codegraph`。
 
 - **配置方式**（「MCP 服务器」页）：填写名称、传输类型与连接配置——
   - `stdio`：启动命令 + 参数（空格分隔）+ 可选环境变量（JSON），例如 `codegraph` + `serve --mcp`；

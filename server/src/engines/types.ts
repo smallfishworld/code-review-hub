@@ -65,6 +65,8 @@ export interface PrepareContext {
 
 /** Change-set collected by prepare(): the retrieval input for memory. */
 export interface PrepareResult {
+  /** The local checkout at this task's revision, if the engine prepares one. */
+  workspacePath?: string;
   /** Changed file paths (repo-relative, forward slashes). */
   changedFiles: string[];
   /** Sampled identifiers from added lines / file names, for FTS matching. */

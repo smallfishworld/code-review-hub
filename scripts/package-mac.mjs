@@ -28,6 +28,7 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
+  readFileSync,
   readdirSync,
   rmSync,
   statSync,
@@ -35,6 +36,7 @@ import {
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { verifyBundledCodeGraph } from './package-codegraph.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -79,6 +81,7 @@ log(`output: ${PKG_DIR} (arch: ${ARCH})`);
 if (process.platform !== 'darwin') {
   fail('this packager builds a macOS bundle and must run on macOS');
 }
+if (ARCH !== process.arch) fail('run the packager with a Node runtime matching the requested architecture');
 
 // Build first so the package always contains current code.
 log('building server + web …');
@@ -91,6 +94,8 @@ if (!existsSync(join(ROOT, 'web', 'dist', 'index.html'))) fail('web build missin
 function findOcrBin() {
   const candidates = [
     join(ROOT, 'node_modules', `@smallfishworld`, `ocr-darwin-${ARCH}`, 'bin', 'opencodereview'),
+    join(run('npm', ['root', '-g']).trim(), '@smallfishworld', 'open-code-review-svn',
+      'node_modules', '@smallfishworld', `ocr-darwin-${ARCH}`, 'bin', 'opencodereview'),
     join(
       process.env.HOME ?? '',
       '.npm-global',
@@ -160,6 +165,7 @@ for (const src of prodPaths) {
   cpSync(src, dest, { recursive: true, verbatimSymlinks: false });
 }
 log(`  ${prodPaths.length} packages`);
+log(`  bundled CodeGraph ${await verifyBundledCodeGraph(PKG_DIR)}`);
 
 // better-sqlite3 ships prebuilds for every platform; keep only darwin ones
 // (both arm64 and x64 so one package can serve both Mac generations when
@@ -276,6 +282,7 @@ const readme = `# 代码评审平台（macOS 免安装包 v${pkgVersion}，${ARC
 | \`web/dist/\` | Web 控制台（由服务端直接托管） |
 | \`node_modules/\` | 生产依赖（已裁剪为 darwin 预编译） |
 | \`vendor/ocr/ocr\` | ocr 评审 CLI（open-code-review v1.13.8-svn.1，darwin-${ARCH}） |
+| \`node_modules/@colbymchenry/\` | 内置 CodeGraph MCP 与本地索引运行时 |
 | \`start.sh\` | 终端 / launchd 启动脚本 |
 | \`start.command\` | Finder 双击启动 |
 | \`com.codereview.platform.plist.example\` | launchd 用户服务模板 |

@@ -8,7 +8,8 @@ import { loadRepoAuth } from '../tasks/ocrRunner.js';
 import { createEngine, getEngineRow, type EngineRow } from './registry.js';
 import { resolveEngineForRepo, EngineResolveError } from './resolver.js';
 import type { PrepareContext, PrepareResult, ReviewEngine } from './types.js';
-import { collectEffectiveServers, buildOcrMcpServers, recordMcpInjection } from '../mcp/injector.js';
+import { collectEffectiveServers, buildOcrMcpServers, isBuiltinCodeGraph, recordMcpInjection } from '../mcp/injector.js';
+import { prepareReviewCodeGraph } from '../mcp/codeGraph.js';
 import { MemoryStore } from '../memory/store.js';
 import { MemoryRetrieval } from '../memory/retrieval.js';
 import { renderMemoryContext, recordMemoryInjection } from '../memory/inject.js';
@@ -114,11 +115,24 @@ export class EngineExecutor {
     let mcpServers: Record<string, unknown> | undefined;
     try {
       if (engine.capabilities.mcp === 'config-inject' && !probe.degraded.includes('mcp')) {
-        const servers = collectEffectiveServers(this.db, task.repoId);
+        let servers = collectEffectiveServers(this.db, task.repoId);
+        let codeGraphArgs: [string, string] | undefined;
+        if (servers.some(isBuiltinCodeGraph)) {
+          try {
+            if (!changes.workspacePath) throw new Error('引擎未提供本地工作副本');
+            codeGraphArgs = await prepareReviewCodeGraph(this.opts.dataDir, task, changes.workspacePath, signal);
+          } catch (err) {
+            signal.throwIfAborted();
+            servers = servers.filter((server) => !isBuiltinCodeGraph(server));
+            const reason = err instanceof Error ? err.message.trim().split('\n').at(-1) : String(err);
+            this.opts.logs?.warn('task', `#${task.id} CodeGraph 索引未就绪，本次跳过: ${reason}`);
+          }
+        }
         if (servers.length > 0) {
           mcpServers = buildOcrMcpServers(servers, {
             dataDir: this.opts.dataDir,
             repoId: task.repoId,
+            codeGraphArgs,
           });
           recordMcpInjection(this.db, task.id, servers);
           this.opts.logs?.info('task', `#${task.id} 注入 ${servers.length} 个 MCP 服务器`);
