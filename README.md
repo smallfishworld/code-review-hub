@@ -31,7 +31,7 @@ ocr --version    # 期望输出 open-code-review v1.13.8-svn.1 ...
 
 `ocr` 自身需要 LLM 配置，两种方式任选其一：
 
-1. **推荐**：在平台 Web 控制台「LLM Provider」页配置 API 地址 / 模型 / Key 并设为默认。平台会为每次评审生成按仓库隔离的 HOME（`<DATA_DIR>/ocr-home/<repo-id>/.opencodereview/config.json`），不受运行账号全局 `~/.opencodereview/config.json` 影响，跨仓库并发任务互不污染。
+1. **推荐**：在平台 Web 控制台「LLM Provider」页配置 API 地址 / 模型 / Key 并设为默认。可在仓库设置中为仓库指定一个 Provider。每个评审执行槽使用独立的 ocr HOME 和模型配置。
 2. 不配置 Provider 时，`ocr` 回退到运行账号自己的 `~/.opencodereview/config.json`。
 
 ### 安装 SVN（Windows）
@@ -134,6 +134,7 @@ node scripts/package-mac.mjs [--arch arm64|x64]
 | --- | --- | --- |
 | `PORT` | `3000` | 监听端口 |
 | `HOST` | `0.0.0.0` | 监听地址（内网部署可改为具体网卡地址） |
+| `REVIEW_MAX_CONCURRENCY` | `4` | 服务实例同时运行的评审任务总上限 |
 | `DATA_DIR` | `<当前目录>/data` | 数据目录：SQLite、加密密钥、报告、工作副本/克隆、`ocr-home` |
 | `AUTH_REQUIRED` | `true` | 设为 `false` 可关闭管理员口令鉴权（仅限受信环境） |
 | `PUBLIC_BASE_URL` | `http://localhost:<PORT>` | 通知中"报告链接"使用的外部地址，部署后请改成实际访问地址 |
@@ -241,7 +242,7 @@ data/
 - 首次启动自动注册一个默认 **ocr** 引擎并设为全局默认；「评审引擎」页可新增 / 启停 / 设默认 / 查看能力声明（支持的 VCS、MCP 接入方式、记忆注入方式等）。当前版本仅内置 ocr 适配器，claude-code / codex 等适配器为后续规划。
 - **三级选择**：任务的引擎按 监控规则级 → 仓库级 → 全局默认 解析；解析失败（引擎被删除或停用）任务**直接失败并写明原因，不静默回退**。被历史任务引用的引擎只能停用、不能删除。
 - **版本门控**：每次评审前探测 `ocr --version`，低于 **1.13** 的运行时自动跳过 MCP 注入与记忆注入（评审照常执行，任务详情标注降级原因）。
-- **隔离模型**：ocr 的 HOME 按仓库隔离（`ocr-home/<repo-id>/`），同仓库任务串行复用，跨仓库并发任务互不影响——这保证 MCP 注入与 SVN 凭据种子不会串仓库。
+- **隔离模型**：在「仓库设置」中配置评审并发数（默认 2，设为 1 串行）和评审模型。每个运行中的任务独占一个完整工作副本、ocr HOME 和 CodeGraph 索引，副本按需创建并复用。模型可继承全局配置或指定仓库 Provider；单个任务调用一个模型。服务实例总并发同时受 `REVIEW_MAX_CONCURRENCY` 限制。
 
 ### 6.2 MCP 服务器
 

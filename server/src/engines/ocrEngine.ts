@@ -10,8 +10,9 @@ import { runGit, ensureGitClone, gitFetchBranch, gitPrepareCommit, gitRemote, gi
 import {
   buildOcrConfig,
   prepareOcrHomeSvnConfig,
-  resolveProvider,
+  resolveRepositoryProvider,
   type OcrConfigFile,
+  type OcrProviderSettings,
 } from '../providers/ocrProviderConfig.js';
 import { workspaceKey } from '../repos/sourceVersion.js';
 import { parseOcrReport } from '../tasks/reportService.js';
@@ -35,20 +36,17 @@ import type {
  * Process plumbing (spawn/kill/timeout/heartbeat) is REUSED from the shipped
  * tasks/ocrRunner.ts (`runOcr` is public); this adapter adds the engine
  * semantics on top:
- * - HOME is isolated PER REPO (`<dataDir>/ocr-home/<repo-id>/`) instead of
- *   shared: MCP injection makes the generated config.json task-dependent, and
- *   the queue runs up to two repos concurrently — a shared home would let one
- *   task overwrite another's MCP config (or leak servers across repos). Same
- *   repo tasks stay serial (queue guarantee) and reuse their home.
+ * - The checkout and HOME belong to an exclusive workspace slot. HOME holds
+ *   task-specific MCP configuration and the slot's SVN authentication cache.
  * - probe() gates runtime features: ocr < 1.13 skips MCP config injection and
  *   `--requirement` memory injection (review continues without them).
  * - prepare() also collects the change set (files + sampled identifiers) as
  *   the retrieval input for project memory.
  */
 
-/** Per-repo isolated HOME for the ocr child process. */
-export function ocrHomeDir(dataDir: string, repoId: number, sourceVersion = 0): string {
-  return join(dataDir, 'ocr-home', workspaceKey(repoId, sourceVersion));
+/** Isolated HOME for the ocr child process and any VCS commands it starts. */
+export function ocrHomeDir(dataDir: string, repoId: number, sourceVersion = 0, workspaceSlot = 0): string {
+  return join(dataDir, 'ocr-home', workspaceKey(repoId, sourceVersion, workspaceSlot));
 }
 
 /** Features that require ocr >= 1.13. */
@@ -156,9 +154,9 @@ export class OcrEngine implements ReviewEngine {
 
   /** Prepare the working copy at the task node + collect the change set. */
   async prepare(ctx: PrepareContext): Promise<PrepareResult> {
-    const repoId = ctx.task.repoId;
-    const workspacePath = workCopyDir(this.opts.dataDir, repoId, ctx.task.sourceVersion);
-    const home = ocrHomeDir(this.opts.dataDir, repoId, ctx.task.sourceVersion);
+    const { repoId, sourceVersion, workspaceSlot } = ctx.task;
+    const workspacePath = workCopyDir(this.opts.dataDir, repoId, sourceVersion, workspaceSlot);
+    const home = ocrHomeDir(this.opts.dataDir, repoId, sourceVersion, workspaceSlot);
     // The ocr HOME must exist BEFORE the SVN credential-seeding checkout so
     // svn writes into the store the ocr child will read (see
     // prepareOcrHomeSvnConfig). Git has no HOME dependency.
@@ -168,10 +166,10 @@ export class OcrEngine implements ReviewEngine {
     try {
       if (ctx.auth.type === 'svn') {
         this.opts.logs?.info('task', `#${ctx.task.id} 同步 SVN 工作副本到 r${ctx.task.node}…`);
-        await this.prepareSvnWorkCopy(ctx, homeEnv);
+        await this.prepareSvnWorkCopy(ctx, workspacePath, homeEnv);
       } else {
         this.opts.logs?.info('task', `#${ctx.task.id} 同步 Git 仓库到 ${ctx.task.node.slice(0, 10)}…`);
-        await this.prepareGitClone(ctx);
+        await this.prepareGitClone(ctx, workspacePath);
       }
     } catch (err) {
       ctx.signal?.throwIfAborted();
@@ -181,7 +179,7 @@ export class OcrEngine implements ReviewEngine {
     }
 
     try {
-      return { ...await this.collectChanges(ctx, homeEnv), workspacePath };
+      return { ...await this.collectChanges(ctx, workspacePath, homeEnv), workspacePath };
     } catch (err) {
       ctx.signal?.throwIfAborted();
       // Memory retrieval input is best-effort: never fail the review over it.
@@ -197,9 +195,9 @@ export class OcrEngine implements ReviewEngine {
   /** Changed files + identifier sampling for the reviewed node. */
   private async collectChanges(
     ctx: PrepareContext,
+    wcDir: string,
     homeEnv: Record<string, string>
   ): Promise<PrepareResult> {
-    const wcDir = workCopyDir(this.opts.dataDir, ctx.task.repoId, ctx.task.sourceVersion);
     const opts = this.vcsOptions(ctx);
     // svn diff --summarize prints ABSOLUTE paths when given an absolute
     // target; memory scope matching expects wc-relative paths, so normalize
@@ -252,8 +250,7 @@ export class OcrEngine implements ReviewEngine {
   }
 
   /** Bootstrap + update the SVN working copy to the task revision. */
-  private async prepareSvnWorkCopy(ctx: PrepareContext, env: Record<string, string>): Promise<void> {
-    const wcDir = workCopyDir(this.opts.dataDir, ctx.task.repoId, ctx.task.sourceVersion);
+  private async prepareSvnWorkCopy(ctx: PrepareContext, wcDir: string, env: Record<string, string>): Promise<void> {
     const opts = { ...this.vcsOptions(ctx), env };
     await ensureSvnWorkspace(wcDir, ctx.auth.url, ctx.auth, opts);
     const rev = validatedNode('svn', ctx.task.node);
@@ -261,8 +258,7 @@ export class OcrEngine implements ReviewEngine {
   }
 
   /** Bootstrap + fetch + checkout the git clone at the task commit. */
-  private async prepareGitClone(ctx: PrepareContext): Promise<void> {
-    const wcDir = workCopyDir(this.opts.dataDir, ctx.task.repoId, ctx.task.sourceVersion);
+  private async prepareGitClone(ctx: PrepareContext, wcDir: string): Promise<void> {
     const opts = this.vcsOptions(ctx);
     await ensureGitClone(wcDir, ctx.auth.url, ctx.auth, opts);
     await gitFetchBranch(wcDir, ctx.auth.url, ctx.auth.branch ?? 'main', ctx.auth, opts);
@@ -273,8 +269,10 @@ export class OcrEngine implements ReviewEngine {
   /** Execute one ocr review run; returns the report path on success. */
   async review(req: ReviewRequest, ctx: PrepareContext): Promise<EngineRawResult & { reportPath?: string }> {
     const commit = validatedNode(ctx.auth.type, ctx.task.node);
-    const wcDir = workCopyDir(this.opts.dataDir, ctx.task.repoId, ctx.task.sourceVersion);
+    const { repoId, sourceVersion, workspaceSlot } = ctx.task;
+    const wcDir = workCopyDir(this.opts.dataDir, repoId, sourceVersion, workspaceSlot);
     ctx.signal?.throwIfAborted();
+    const provider = resolveRepositoryProvider(this.db, this.credentials, repoId);
     const args = [
       'review',
       '--repo',
@@ -301,7 +299,7 @@ export class OcrEngine implements ReviewEngine {
     }
 
     try {
-      const result = await this.runOcrWithConfig(args, ctx, req.mcpServers ?? null);
+      const result = await this.runOcrWithConfig(args, ctx, provider, req.mcpServers ?? null);
       ctx.signal?.throwIfAborted();
       const unsupported = /^(?:Error:\s*)?(?:unknown (?:flag|option)|unrecognized option)[^\r\n]*--background-file\b/m;
       if (result.exitCode === 0 || !useRequirement || process.platform === 'win32' ||
@@ -309,7 +307,7 @@ export class OcrEngine implements ReviewEngine {
       // Retry only when the CLI rejected the file option before doing any work.
       const inlineArgs = args.slice(0, -2);
       inlineArgs.push('--background', req.requirementText!.slice(0, 6000));
-      const retry = await this.runOcrWithConfig(inlineArgs, ctx, req.mcpServers ?? null);
+      const retry = await this.runOcrWithConfig(inlineArgs, ctx, provider, req.mcpServers ?? null);
       return retry.exitCode === 0 ? retry : result;
     } finally {
       if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
@@ -318,17 +316,18 @@ export class OcrEngine implements ReviewEngine {
 
   /**
    * One runOcr invocation with the per-repo HOME config written just before
-   * the process starts (provider + MCP servers). Home is repo-scoped: config
-   * is task-dependent and repos run concurrently (see class doc).
+   * the process starts (provider + MCP servers). The workspace slot is leased
+   * for the entire review, so another review cannot overwrite this config.
    */
   private async runOcrWithConfig(
     args: string[],
     ctx: PrepareContext,
+    provider: OcrProviderSettings | null,
     mcpServers: Record<string, unknown> | null
   ): Promise<EngineRawResult & { reportPath?: string }> {
     const task = ctx.task;
-    const home = ocrHomeDir(this.opts.dataDir, task.repoId, task.sourceVersion);
-    this.writeHomeConfig(home, mcpServers);
+    const home = ocrHomeDir(this.opts.dataDir, task.repoId, task.sourceVersion, task.workspaceSlot);
+    this.writeHomeConfig(home, provider, mcpServers);
     const homeEnv = { HOME: home, USERPROFILE: home };
     const env = ctx.auth.type === 'git' ? gitRemote(ctx.auth.url, ctx.auth, homeEnv).env : homeEnv;
     return this.runner.runOcr(args, task.id, ctx.onSpawn, env, ctx.signal);
@@ -339,8 +338,11 @@ export class OcrEngine implements ReviewEngine {
    * provider (when any) plus the repo's MCP servers (when the engine is not
    * version-degraded). Equivalent to prepareOcrHome + mcp_servers extension.
    */
-  private writeHomeConfig(home: string, mcpServers: Record<string, unknown> | null): void {
-    const provider = resolveProvider(this.db, this.credentials);
+  private writeHomeConfig(
+    home: string,
+    provider: OcrProviderSettings | null,
+    mcpServers: Record<string, unknown> | null
+  ): void {
     const config: OcrConfigFile & { mcp_servers?: Record<string, unknown> } = provider
       ? buildOcrConfig(provider)
       : {};

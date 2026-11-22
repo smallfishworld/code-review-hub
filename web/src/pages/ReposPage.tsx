@@ -1,6 +1,6 @@
 import { useEffect, useId, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, type Repo } from '../api/client';
+import { api, type Provider, type Repo } from '../api/client';
 import { errorText, useApi, usePageTitle } from '../api/hooks';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useFlash } from '../components/Toast';
@@ -12,8 +12,12 @@ interface FormState {
   username: string;
   password: string;
   branch: string;
+  reviewConcurrency: string;
+  providerId: number | null;
   enabled: boolean;
 }
+
+const DEFAULT_REVIEW_CONCURRENCY = 2;
 
 const emptyForm: FormState = {
   type: 'svn',
@@ -22,12 +26,15 @@ const emptyForm: FormState = {
   username: '',
   password: '',
   branch: 'main',
+  reviewConcurrency: String(DEFAULT_REVIEW_CONCURRENCY),
+  providerId: null,
   enabled: true,
 };
 
 export function ReposPage() {
   usePageTitle('仓库管理');
   const repos = useApi(() => api.get<Repo[]>('/api/repos'));
+  const providers = useApi(() => api.get<Provider[]>('/api/providers'));
   const flash = useFlash();
   const confirm = useConfirm();
   const [form, setForm] = useState<FormState>(emptyForm);
@@ -54,10 +61,15 @@ export function ReposPage() {
     username: useId(),
     password: useId(),
     branch: useId(),
+    reviewConcurrency: useId(),
+    reviewConcurrencyHint: useId(),
+    provider: useId(),
     enabled: useId(),
     hint: useId(),
     error: useId(),
   };
+  const defaultProvider = providers.data?.find((provider) => provider.isDefault) ?? providers.data?.[0];
+  const selectedProviderUnavailable = !providers.data?.some((provider) => provider.id === form.providerId);
 
   const startCreate = () => {
     setEditingId(null);
@@ -74,6 +86,8 @@ export function ReposPage() {
       username: repo.username ?? '',
       password: '',
       branch: repo.branch ?? 'main',
+      reviewConcurrency: String(repo.reviewConcurrency ?? DEFAULT_REVIEW_CONCURRENCY),
+      providerId: repo.providerId ?? null,
       enabled: repo.enabled,
     });
     setFormError(null);
@@ -90,6 +104,8 @@ export function ReposPage() {
       username: form.username.trim() || undefined,
       password: form.password || undefined,
       branch: form.type === 'git' ? form.branch.trim() || 'main' : undefined,
+      reviewConcurrency: Number(form.reviewConcurrency),
+      providerId: form.providerId,
       enabled: form.enabled,
     };
     try {
@@ -239,6 +255,55 @@ export function ReposPage() {
                   onChange={(e) => setForm({ ...form, branch: e.target.value })}
                 />
               </label>
+            )}
+            <label htmlFor={ids.reviewConcurrency}>
+              评审并发数（必填）
+              <input
+                id={ids.reviewConcurrency}
+                name="reviewConcurrency"
+                type="number"
+                min={1}
+                max={Number.MAX_SAFE_INTEGER}
+                step={1}
+                required
+                aria-describedby={ids.reviewConcurrencyHint}
+                value={form.reviewConcurrency}
+                onChange={(e) => setForm({ ...form, reviewConcurrency: e.target.value })}
+              />
+            </label>
+            <p className="muted small" id={ids.reviewConcurrencyHint}>
+              同一仓库同时运行的评审任务数。设为 1 时串行，实际并发还受实例上限约束。
+            </p>
+            <label htmlFor={ids.provider}>
+              评审模型
+              <select
+                id={ids.provider}
+                name="providerId"
+                value={form.providerId ?? ''}
+                disabled={providers.loading || providers.data === null}
+                onChange={(e) => setForm({ ...form, providerId: e.target.value ? Number(e.target.value) : null })}
+              >
+                <option value="">
+                  继承全局默认{defaultProvider ? `（${defaultProvider.name} · ${defaultProvider.model}）` : ''}
+                </option>
+                {form.providerId !== null && selectedProviderUnavailable && (
+                  <option value={form.providerId}>已选模型（当前不可用）</option>
+                )}
+                {providers.data?.map((provider) => (
+                  <option key={provider.id} value={provider.id}>
+                    {provider.name} · {provider.model}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {providers.loading && <p className="muted small" role="status">正在加载模型列表…</p>}
+            {providers.error && (
+              <p className="muted small" role="alert">
+                模型列表加载失败。<button type="button" className="link" onClick={providers.reload}>重试</button>
+              </p>
+            )}
+            {providers.data?.length === 0 && (
+              <p className="muted small">可在 <Link to="/providers">LLM Provider</Link> 中添加模型。</p>
             )}
             <label className="checkbox" htmlFor={ids.enabled}>
               <input

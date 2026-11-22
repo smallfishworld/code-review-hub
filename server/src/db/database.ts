@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 export type RepoType = 'svn' | 'git';
 
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 11;
 
 /**
  * Ordered, append-only list of migrations. Each entry runs once, tracked in
@@ -325,6 +325,17 @@ const MIGRATIONS: { version: number; name: string; up: (db: Database.Database) =
         CREATE INDEX idx_task_repo_node ON task(repo_id, source_version, node);
         CREATE UNIQUE INDEX idx_task_active ON task(repo_id, source_version, node, trigger)
           WHERE status IN ('queued','running');
+      `);
+    },
+  },
+  {
+    version: 11,
+    name: 'repository-review-settings',
+    up: (db) => {
+      db.exec(`
+        ALTER TABLE repo ADD COLUMN review_concurrency INTEGER NOT NULL DEFAULT 2
+          CHECK (review_concurrency >= 1 AND typeof(review_concurrency) = 'integer');
+        ALTER TABLE repo ADD COLUMN provider_id INTEGER REFERENCES provider(id) ON DELETE SET NULL;
       `);
     },
   },

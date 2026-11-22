@@ -15,6 +15,8 @@ export interface TaskRecord {
   trigger: TaskTrigger;
   status: TaskStatus;
   sourceVersion?: number;
+  /** Temporary workspace lease supplied to the executor. */
+  workspaceSlot?: number;
   monitorRuleId?: number;
   engineId?: number;
   engineSelectionError?: string;
@@ -68,15 +70,14 @@ function rowToTask(row: Record<string, unknown>): TaskRecord {
 /**
  * Worker pool executing review tasks.
  *
- * Scheduling rule: per-repo serial (one task at a time per repo — protects
- * the repo's working copy/clone from concurrent sync), across repos up to
- * `maxConcurrentRepos` in parallel.
+ * Each task holds a workspace slot under its repository's concurrency limit.
+ * The oldest eligible task starts when a slot and global capacity are available.
  *
  * The actual review work is injected via the `executor` callback, keeping
  * this class testable with a fake `ocr` script and reusable by the monitor.
  */
 export class TaskQueue extends EventEmitter {
-  private runningRepos = new Set<number>();
+  private readonly workspaceSlots = new Map<number, Set<number>>();
   private readonly runningControllers = new Map<number, AbortController>();
   /** Live kill handles of running tasks (task id -> latest spawned child). */
   private runningHandles = new Map<number, { kill: (signal?: string) => void }>();
@@ -93,7 +94,7 @@ export class TaskQueue extends EventEmitter {
   constructor(
     private readonly db: Database.Database,
     private readonly executor: (task: TaskRecord, onSpawn: TaskSpawnHandler, signal: AbortSignal) => Promise<TaskExecutionResult>,
-    private readonly maxConcurrentRepos = 2,
+    private readonly maxConcurrentTasks = 2,
     /** Runtime log sink (web console); task lifecycle lands here. */
     private readonly logs?: LogService,
     private readonly reports?: ReportService
@@ -129,7 +130,7 @@ export class TaskQueue extends EventEmitter {
       )
       .run();
     // queued tasks simply stay queued; kick the loop.
-    void this.drain();
+    this.kick();
   }
 
   /** Enqueue a task. Deduped by (repo, node, trigger) UNIQUE, plus terminal-state handling. */
@@ -280,6 +281,7 @@ export class TaskQueue extends EventEmitter {
     };
     void loop().finally(() => {
       this.draining = false;
+      if (this.pendingKicks > 0) this.kick();
     });
   }
 
@@ -291,7 +293,7 @@ export class TaskQueue extends EventEmitter {
           .prepare(`SELECT COUNT(*) AS n FROM task WHERE status IN ('queued','running')`)
           .get() as { n: number }
       ).n;
-      if (pending === 0 && this.inFlight === 0 && this.runningRepos.size === 0) return;
+      if (pending === 0 && this.inFlight === 0) return;
       await new Promise<void>((resolve) => {
         this.idleWaiters.push(resolve);
         setTimeout(resolve, 25); // safety valve if no further events fire
@@ -311,31 +313,39 @@ export class TaskQueue extends EventEmitter {
       // must not throw unhandled.
       if (this.stopped) return;
       try {
-        if (this.runningRepos.size >= this.maxConcurrentRepos) return;
-        // pick the oldest queued task whose repo is not already running
+        if (this.inFlight >= this.maxConcurrentTasks) return;
+        // Keep tasks for deleted repositories eligible so the executor can
+        // fail them explicitly rather than leaving them stranded in the queue.
         const candidates = this.db
-          .prepare(`SELECT repo_id FROM task WHERE status = 'queued' ORDER BY id`)
-          .all() as { repo_id: number }[];
-        const nextRepo = candidates.find((c) => !this.runningRepos.has(c.repo_id))?.repo_id;
-        if (nextRepo === undefined) return;
-
-        const task = this.db
           .prepare(
-            `SELECT * FROM task WHERE status = 'queued' AND repo_id = ? ORDER BY id LIMIT 1`
+            `SELECT MIN(t.id) AS task_id, t.repo_id, COALESCE(r.review_concurrency, 1) AS review_concurrency
+             FROM task t LEFT JOIN repo r ON r.id = t.repo_id
+             WHERE t.status = 'queued'
+             GROUP BY t.repo_id, r.review_concurrency
+             ORDER BY task_id`
           )
-          .get(nextRepo) as Record<string, unknown> | undefined;
-        if (!task) return;
-        void this.runTask(rowToTask(task));
+          .all() as { task_id: number; repo_id: number; review_concurrency: number }[];
+        const next = candidates.find((candidate) =>
+          (this.workspaceSlots.get(candidate.repo_id)?.size ?? 0) < candidate.review_concurrency
+        );
+        if (!next) return;
+
+        const task = this.get(next.task_id);
+        const slots = this.workspaceSlots.get(task.repoId) ?? new Set<number>();
+        let slot = 0;
+        while (slots.has(slot)) slot++;
+        slots.add(slot);
+        this.workspaceSlots.set(task.repoId, slots);
+        void this.runTask(task, slot, slots);
       } catch {
         return;
       }
     }
   }
 
-  private async runTask(task: TaskRecord): Promise<void> {
+  private async runTask(task: TaskRecord, workspaceSlot: number, slots: Set<number>): Promise<void> {
     const controller = new AbortController();
     this.runningControllers.set(task.id, controller);
-    this.runningRepos.add(task.repoId);
     this.inFlight++;
     this.logs?.info('task', `#${task.id} 开始评审 repo=${task.repoId} node=${task.node} (${task.trigger})`);
     try {
@@ -353,7 +363,7 @@ export class TaskQueue extends EventEmitter {
 
       let result: TaskExecutionResult;
       try {
-        result = await this.executor(task, onSpawn, controller.signal);
+        result = await this.executor({ ...task, workspaceSlot }, onSpawn, controller.signal);
       } catch (err) {
         result = { exitCode: -1, error: err instanceof Error ? err.message : String(err) };
       }
@@ -392,7 +402,8 @@ export class TaskQueue extends EventEmitter {
       this.inFlight--;
       this.runningControllers.delete(task.id);
       this.runningHandles.delete(task.id);
-      this.runningRepos.delete(task.repoId);
+      slots.delete(workspaceSlot);
+      if (slots.size === 0) this.workspaceSlots.delete(task.repoId);
       this.kick();
       this.wakeIdleWaiters();
     }

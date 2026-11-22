@@ -7,7 +7,8 @@ export function repoSourceVersion(db: Database.Database, repoId: number): number
   return row?.source_version;
 }
 
-/** Existing caches use the bare repo ID. Each source replacement gets a fresh cache. */
-export function workspaceKey(repoId: number, sourceVersion = 0): string {
-  return sourceVersion === 0 ? String(repoId) : `${repoId}-v${sourceVersion}`;
+/** Slot zero preserves the existing cache path, including after source replacement. */
+export function workspaceKey(repoId: number, sourceVersion = 0, workspaceSlot = 0): string {
+  const sourceKey = sourceVersion === 0 ? String(repoId) : `${repoId}-v${sourceVersion}`;
+  return workspaceSlot === 0 ? sourceKey : `${sourceKey}-slot-${workspaceSlot}`;
 }

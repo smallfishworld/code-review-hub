@@ -10,12 +10,12 @@ import { SecretStore } from '../crypto/secrets.js';
 import { CredentialService } from '../crypto/credentialService.js';
 import { RepoService } from '../repos/repoService.js';
 import { ReportService } from '../tasks/reportService.js';
-import { TaskQueue } from '../tasks/taskQueue.js';
+import { TaskQueue, type TaskRecord } from '../tasks/taskQueue.js';
 import { TriggerService } from '../tasks/triggerService.js';
 import { OcrRunner, workCopyDir } from '../tasks/ocrRunner.js';
 import { bootstrapEngines } from './registry.js';
 import { EngineExecutor } from './executor.js';
-import { OcrEngine } from './ocrEngine.js';
+import { OcrEngine, ocrHomeDir } from './ocrEngine.js';
 import type { ReviewRequest } from './types.js';
 
 let dir: string;
@@ -131,7 +131,7 @@ describe('engine execution and report publication', () => {
     ).run(repo.id).lastInsertRowid);
     db.prepare("INSERT INTO monitor_state (rule_id, last_node, head_node) VALUES (?, '99', '99')").run(ruleId);
     vi.spyOn(OcrEngine.prototype, 'review').mockImplementation(async (req, ctx) => {
-      const workspace = workCopyDir(dir, ctx.task.repoId, ctx.task.sourceVersion);
+      const workspace = workCopyDir(dir, ctx.task.repoId, ctx.task.sourceVersion, ctx.task.workspaceSlot);
       return writeReport(req, readFileSync(join(workspace, 'sample.txt'), 'utf8'));
     });
     const before = (await trigger.triggerSingle(repo.id, '1')).task!;
@@ -165,6 +165,80 @@ describe('engine execution and report publication', () => {
     await queue.idle();
     expect(queue.get(task.id).status).toBe('succeeded');
     expect(reports.issues(task.id)[0].description).toBe('current');
+  });
+});
+
+describe('parallel review workspaces', () => {
+  it.each(['git', 'svn'] as const)('keeps two %s snapshots and ocr configs isolated', async (type) => {
+    const origin = join(dir, 'origin');
+    let url: string;
+    let first: string;
+    let second: string;
+    if (type === 'git') {
+      const git = (args: string[]) => execFileSync('git', args, { cwd: origin, encoding: 'utf8' });
+      execFileSync('git', ['init', '-b', 'main', origin], { stdio: 'ignore' });
+      const commit = (content: string) => {
+        writeFileSync(join(origin, 'sample.txt'), content);
+        git(['add', 'sample.txt']);
+        git(['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', content]);
+        return git(['rev-parse', 'HEAD']).trim();
+      };
+      url = origin;
+      first = commit('first');
+      second = commit('second');
+    } else {
+      url = createSvnRepo('first');
+      execFileSync('svn', ['checkout', url, origin]);
+      writeFileSync(join(origin, 'sample.txt'), 'second');
+      execFileSync('svn', ['commit', '-m', 'second', origin]);
+      first = '1';
+      second = '2';
+    }
+
+    const sourceVersion = 3;
+    const addProvider = (name: string, model: string) => db.prepare(
+      "INSERT INTO provider (name, api_base, model, protocol) VALUES (?, 'http://127.0.0.1:11434/v1', ?, 'openai')"
+    ).run(name, model).lastInsertRowid;
+    addProvider('global', 'global-model');
+    const providerId = addProvider('repository', 'repository-model');
+    const repoId = Number(db.prepare(
+      `INSERT INTO repo (type, name, url, branch, source_version, provider_id)
+       VALUES (?, 'parallel-fixture', ?, 'main', ?, ?)`
+    ).run(type, url, sourceVersion, providerId).lastInsertRowid);
+    const auth = { type, url, branch: 'main' };
+    const tasks: TaskRecord[] = [first, second].map((node, workspaceSlot) => ({
+      id: workspaceSlot + 1, repoId, sourceVersion, workspaceSlot, node,
+      trigger: 'manual', status: 'running', createdAt: '',
+    }));
+    const contexts = tasks.map((task) => ({ task, auth, onSpawn() {} }));
+    const engines = tasks.map(() => new OcrEngine(1, 'ocr', db, credentials, { dataDir: dir }));
+    const results = await Promise.all(engines.map((engine, i) => engine.prepare(contexts[i])));
+    const expected = (slot: number) => workCopyDir(dir, repoId, sourceVersion, slot);
+    expect(results.map((result) => result.workspacePath)).toEqual([expected(0), expected(1)]);
+    expect(results.map((result) => result.changedFiles)).toEqual([['sample.txt'], ['sample.txt']]);
+    expect(expected(0)).toBe(workCopyDir(dir, repoId, sourceVersion));
+    expect(expected(1)).not.toBe(expected(0));
+
+    const run = vi.spyOn(OcrRunner.prototype, 'runOcr').mockResolvedValue({ exitCode: 0 });
+    await Promise.all(engines.map((engine, i) => engine.review({
+      task: tasks[i],
+      reportPath: join(dir, `report-${i}.json`),
+      mcpServers: { codegraph: { workspace: expected(i) } },
+    }, contexts[i])));
+    for (const [i, content] of ['first', 'second'].entries()) {
+      const [args, , , env] = run.mock.calls[i];
+      const home = ocrHomeDir(dir, repoId, sourceVersion, i);
+      expect(args[args.indexOf('--repo') + 1]).toBe(expected(i));
+      expect(args[args.indexOf('--commit') + 1]).toBe(tasks[i].node);
+      expect(readFileSync(join(expected(i), 'sample.txt'), 'utf8')).toBe(content);
+      expect(env).toMatchObject({ HOME: home, USERPROFILE: home });
+      const config = JSON.parse(readFileSync(join(home, '.opencodereview', 'config.json'), 'utf8'));
+      expect(config).toMatchObject({
+        provider: 'repository',
+        custom_providers: { repository: { model: 'repository-model' } },
+        mcp_servers: { codegraph: { workspace: expected(i) } },
+      });
+    }
   });
 });
 

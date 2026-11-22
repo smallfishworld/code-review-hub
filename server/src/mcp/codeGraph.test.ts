@@ -101,8 +101,10 @@ it('indexes real Git and SVN checkouts, refreshes changes, and scopes tool calls
     cli('svn', ['add', 'math.ts'], svn);
     cli('svn', ['commit', '-m', 'fixture'], svn);
 
-    const [gitWorkspace, gitIndex] = await prepareReviewCodeGraph(data, task, git, signal);
-    const [svnWorkspace, svnIndex] = await prepareReviewCodeGraph(data, { ...task, repoId: 2 }, svn, signal);
+    const [[gitWorkspace, gitIndex], [svnWorkspace, svnIndex]] = await Promise.all([
+      prepareReviewCodeGraph(data, { ...task, workspaceSlot: 0 }, git, signal),
+      prepareReviewCodeGraph(data, { ...task, workspaceSlot: 1 }, svn, signal),
+    ]);
     expect(gitWorkspace).toBe(realpathSync(git));
     expect(svnIndex).not.toBe(gitIndex);
     expect(await explore(gitWorkspace, gitIndex, 'gitAverage', svnWorkspace)).toContain('return 17');

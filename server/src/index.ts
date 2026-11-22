@@ -31,6 +31,7 @@ import fastifyStatic from '@fastify/static';
 const port = Number(process.env.PORT ?? 3000);
 const host = process.env.HOST ?? '0.0.0.0';
 const dataDir = process.env.DATA_DIR ?? join(process.cwd(), 'data');
+const maxReviewConcurrency = Number(process.env.REVIEW_MAX_CONCURRENCY ?? 4);
 /** Set AUTH_REQUIRED=false to disable the admin-password guard. */
 const authRequired = process.env.AUTH_REQUIRED !== 'false';
 
@@ -70,6 +71,9 @@ function findWebDist(): string | null {
 }
 
 async function main() {
+  if (!Number.isSafeInteger(maxReviewConcurrency) || maxReviewConcurrency < 1) {
+    throw new Error('REVIEW_MAX_CONCURRENCY 必须是正整数');
+  }
   // Startup dependency check: svn/git are conditional (per repo type),
   // ocr is required for reviews.
   const depReport = await checkDependencies();
@@ -88,7 +92,7 @@ async function main() {
   const engineExecutor = new EngineExecutor(db, credentials, { dataDir, logs });
   const reports = new ReportService(db);
   reports.recoverLegacyIndexes(dataDir);
-  const queue = new TaskQueue(db, engineExecutor.execute, 2, logs, reports);
+  const queue = new TaskQueue(db, engineExecutor.execute, maxReviewConcurrency, logs, reports);
   const events = new TaskEventHub(db, queue, reports, dataDir, credentials);
   events.start();
 
@@ -104,7 +108,10 @@ async function main() {
   app.post('/api/deps/check', async () => checkDependencies());
 
   buildRepoRoutes(db, credentials, {
-    onRepoChange: (repoId) => monitor.syncRepo(repoId),
+    onRepoChange: (repoId) => {
+      monitor.syncRepo(repoId);
+      queue.kick();
+    },
     dataDir,
     workspaceInit,
   }).register(app);

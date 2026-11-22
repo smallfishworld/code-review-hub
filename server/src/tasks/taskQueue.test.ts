@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDatabase } from '../db/database.js';
-import { TaskQueue, type TaskRecord } from './taskQueue.js';
+import { TaskQueue, type TaskRecord, type TaskSpawnHandler } from './taskQueue.js';
 import type Database from 'better-sqlite3';
 
 let dir: string;
@@ -54,6 +54,25 @@ function seedRepo(db: Database.Database, name = 'r1'): number {
   return Number(info.lastInsertRowid);
 }
 
+function gatedExecutor() {
+  const started: TaskRecord[] = [];
+  const active = new Map<number, { release: () => void; signal: AbortSignal }>();
+  const executor = async (task: TaskRecord, _onSpawn: TaskSpawnHandler, signal: AbortSignal) => {
+    started.push(task);
+    await new Promise<void>((release) => active.set(task.id, { release, signal }));
+    active.delete(task.id);
+    return { exitCode: 0 };
+  };
+  return {
+    started,
+    active,
+    executor,
+    release(task: TaskRecord) {
+      active.get(task.id)!.release();
+    },
+  };
+}
+
 describe('TaskQueue lifecycle', () => {
   it('queues -> runs -> succeeds and emits completion events', async () => {
     q = new TaskQueue(db, fakeExecutor());
@@ -92,6 +111,7 @@ describe('TaskQueue lifecycle', () => {
     q = new TaskQueue(db, executor, 2);
     seedRepo(db, 'r1'); // id 1
     seedRepo(db, 'r2'); // id 2
+    db.prepare('UPDATE repo SET review_concurrency = 1').run();
     q.enqueue(1, 'a1', 'manual');
     q.enqueue(1, 'a2', 'manual');
     q.enqueue(2, 'b1', 'manual');
@@ -104,6 +124,75 @@ describe('TaskQueue lifecycle', () => {
     expect(total).toBe(4);
     const succeeded = q.list({ status: 'succeeded' });
     expect(succeeded.total).toBe(4);
+  });
+
+  it('leases two slots by default, skips saturated repositories, and honors the global limit', async () => {
+    const gate = gatedExecutor();
+    const queue = q = new TaskQueue(db, gate.executor, 3);
+    const a = seedRepo(db, 'a');
+    const b = seedRepo(db, 'b');
+    const a1 = queue.enqueue(a, 'a1', 'manual');
+    const a2 = queue.enqueue(a, 'a2', 'manual');
+    const a3 = queue.enqueue(a, 'a3', 'manual');
+    const b1 = queue.enqueue(b, 'b1', 'manual');
+    const b2 = queue.enqueue(b, 'b2', 'manual');
+
+    await vi.waitFor(() => expect(gate.started.map(({ id }) => id)).toEqual([a1.id, a2.id, b1.id]));
+    expect(gate.started.map(({ workspaceSlot }) => workspaceSlot)).toEqual([0, 1, 0]);
+    expect(queue.get(a1.id).workspaceSlot).toBeUndefined();
+    expect(queue.get(a3.id).status).toBe('queued');
+    expect(queue.get(b2.id).status).toBe('queued');
+
+    gate.release(a2);
+    await vi.waitFor(() => expect(gate.started.at(-1)).toMatchObject({ id: a3.id, workspaceSlot: 1 }));
+    expect(queue.get(b2.id).status).toBe('queued');
+
+    gate.release(b1);
+    await vi.waitFor(() => expect(gate.started.at(-1)).toMatchObject({ id: b2.id, workspaceSlot: 0 }));
+    for (const task of [a1, a3, b2]) gate.release(task);
+    await queue.idle();
+  });
+
+  it('keeps a cancelled slot leased until its executor exits and honors live repository limits', async () => {
+    const gate = gatedExecutor();
+    const queue = q = new TaskQueue(db, gate.executor, 4);
+    const repoId = seedRepo(db);
+    const first = queue.enqueue(repoId, 'r1', 'manual');
+    const second = queue.enqueue(repoId, 'r2', 'manual');
+    const third = queue.enqueue(repoId, 'r3', 'manual');
+    await vi.waitFor(() => expect(gate.started).toHaveLength(2));
+
+    expect(queue.cancel(first.id)).toBe(true);
+    expect(gate.active.get(first.id)?.signal.aborted).toBe(true);
+    expect(gate.active.get(second.id)?.signal.aborted).toBe(false);
+    db.prepare('UPDATE repo SET review_concurrency = 1 WHERE id = ?').run(repoId);
+    const other = queue.enqueue(seedRepo(db, 'other'), 'r4', 'manual');
+    await vi.waitFor(() => expect(gate.started.at(-1)?.id).toBe(other.id));
+    expect(queue.get(third.id).status).toBe('queued');
+    expect(queue.get(first.id).status).toBe('running');
+
+    gate.release(first);
+    await vi.waitFor(() => expect(queue.get(first.id).status).toBe('cancelled'));
+    expect(queue.get(third.id).status).toBe('queued');
+    db.prepare('UPDATE repo SET review_concurrency = 2 WHERE id = ?').run(repoId);
+    queue.kick();
+    await vi.waitFor(() => expect(gate.started.at(-1)).toMatchObject({ id: third.id, workspaceSlot: 0 }));
+    for (const task of [second, third, other]) gate.release(task);
+    await queue.idle();
+  });
+
+  it('runs a queued task for a deleted repository so it can fail explicitly', async () => {
+    const repoId = seedRepo(db);
+    const taskId = Number(db.prepare(
+      "INSERT INTO task (repo_id, node, trigger, status) VALUES (?, 'r1', 'auto', 'queued')"
+    ).run(repoId).lastInsertRowid);
+    db.prepare('DELETE FROM repo WHERE id = ?').run(repoId);
+    const execute = vi.fn(async () => { throw new Error('repo not found'); });
+    const queue = q = new TaskQueue(db, execute);
+    queue.kick();
+    await queue.idle();
+    expect(execute).toHaveBeenCalledOnce();
+    expect(queue.get(taskId)).toMatchObject({ status: 'failed', error: 'repo not found' });
   });
 
   it('cancel kills a running task and marks it cancelled', async () => {

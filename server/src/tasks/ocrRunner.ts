@@ -102,9 +102,9 @@ function loadRepoAuth(
   });
 }
 
-/** Directory holding the cached working copy / clone for a repo. */
-export function workCopyDir(dataDir: string, repoId: number, sourceVersion = 0): string {
-  return join(dataDir, 'workcopies', workspaceKey(repoId, sourceVersion));
+/** Directory holding the working copy / clone for a repository slot. */
+export function workCopyDir(dataDir: string, repoId: number, sourceVersion = 0, workspaceSlot = 0): string {
+  return join(dataDir, 'workcopies', workspaceKey(repoId, sourceVersion, workspaceSlot));
 }
 
 export class OcrRunner {

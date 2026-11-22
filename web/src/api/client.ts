@@ -80,6 +80,8 @@ export interface Repo {
   url: string;
   username?: string;
   branch?: string;
+  reviewConcurrency: number;
+  providerId: number | null;
   enabled: boolean;
   hasCredential: boolean;
   /** Workspace prewarm state: pending/preparing = download in flight. */

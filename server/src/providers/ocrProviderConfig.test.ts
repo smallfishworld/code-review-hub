@@ -9,6 +9,7 @@ import {
   buildOcrConfig,
   prepareOcrHome,
   resolveProvider,
+  resolveRepositoryProvider,
   defaultProviderId,
 } from './ocrProviderConfig.js';
 import type Database from 'better-sqlite3';
@@ -114,6 +115,21 @@ describe('ocr provider config bridge', () => {
     ) as { provider: string; custom_providers: Record<string, { api_key: string }> };
     expect(written.provider).toBe('gw');
     expect(written.custom_providers.gw.api_key).toBe('secret');
+  });
+
+  it('uses the repository model override and inherits when the override is cleared or deleted', () => {
+    const global = addProvider('shared', { model: 'general' });
+    const specific = addProvider('specific', { model: 'review' });
+    db.prepare("INSERT INTO setting (key, value) VALUES ('default_provider_id', ?)").run(String(global));
+    const id = Number(db.prepare(
+      "INSERT INTO repo (type, url, name, provider_id) VALUES ('svn', 'file:///repo', 'repo', ?)"
+    ).run(specific).lastInsertRowid);
+    expect(resolveRepositoryProvider(db, credentials, id)).toMatchObject({ name: 'specific', model: 'review' });
+    db.prepare('UPDATE repo SET provider_id = NULL WHERE id = ?').run(id);
+    expect(resolveRepositoryProvider(db, credentials, id)).toMatchObject({ name: 'shared', model: 'general' });
+    db.prepare('UPDATE repo SET provider_id = ? WHERE id = ?').run(specific, id);
+    db.prepare('DELETE FROM provider WHERE id = ?').run(specific);
+    expect(resolveRepositoryProvider(db, credentials, id)).toMatchObject({ name: 'shared', model: 'general' });
   });
 
   it('returns null when no provider is configured', () => {

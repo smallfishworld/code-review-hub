@@ -44,6 +44,8 @@ export interface RepoInput {
   branch?: string; // git only
   enabled?: boolean;
   engineId?: number | null;
+  reviewConcurrency?: number;
+  providerId?: number | null;
 }
 
 export type RepoInitStatus = 'pending' | 'preparing' | 'ready' | 'failed';
@@ -57,6 +59,8 @@ export interface RepoRecord {
   branch?: string;
   enabled: boolean;
   engineId: number | null;
+  reviewConcurrency: number;
+  providerId: number | null;
   hasCredential: boolean;
   /** Workspace prewarm state: pending/preparing = download in flight. */
   initStatus: RepoInitStatus;
@@ -115,6 +119,7 @@ export class RepoService {
     const dup = this.db.prepare('SELECT id FROM repo WHERE name = ?').get(input.name);
     if (dup) throw new RepoServiceError(`仓库 "${input.name}" 已存在`, 409);
     await this.verifyConnectivity(input);
+    this.validateProvider(input.providerId);
 
     const credentialId = input.password
       ? this.credentials.store(`repo:${input.name}`, input.type, input.password)
@@ -122,8 +127,11 @@ export class RepoService {
 
     const info = this.db
       .prepare(
-        `INSERT INTO repo (type, name, url, username, credential_id, branch, enabled, engine_id, init_status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')`
+        `INSERT INTO repo (
+           type, name, url, username, credential_id, branch, enabled, engine_id,
+           review_concurrency, provider_id, init_status
+         )
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`
       )
       .run(
         input.type,
@@ -133,7 +141,9 @@ export class RepoService {
         credentialId,
         input.type === 'git' ? input.branch ?? 'main' : null,
         input.enabled === false ? 0 : 1,
-        input.engineId ?? null
+        input.engineId ?? null,
+        input.reviewConcurrency ?? 2,
+        input.providerId ?? null
       );
     return this.get(Number(info.lastInsertRowid));
   }
@@ -163,6 +173,7 @@ export class RepoService {
         | Record<string, unknown>
         | undefined;
       if (!current) throw new RepoServiceError('仓库不存在', 404);
+      this.validateProvider(input.providerId);
       const branch = input.type === 'git' ? input.branch ?? 'main' : null;
       const changed = current.type !== input.type || current.url !== input.url || current.branch !== branch;
       const sourceVersion = (current.source_version as number) + Number(changed);
@@ -176,12 +187,15 @@ export class RepoService {
         `UPDATE repo
          SET type = ?, name = ?, url = ?, username = ?, credential_id = ?,
              branch = ?, enabled = ?, engine_id = ?, source_version = ?,
+             review_concurrency = ?, provider_id = ?,
              updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
          WHERE id = ?`
       ).run(
         input.type, input.name, input.url, input.username ?? null, credentialId,
         branch, input.enabled === false ? 0 : 1,
-        input.engineId === undefined ? current.engine_id : input.engineId, sourceVersion, id
+        input.engineId === undefined ? current.engine_id : input.engineId, sourceVersion,
+        input.reviewConcurrency ?? current.review_concurrency,
+        input.providerId === undefined ? current.provider_id : input.providerId, id
       );
       if (changed) {
         this.db.prepare(
@@ -398,6 +412,8 @@ export class RepoService {
       branch: (row.branch as string | null) ?? undefined,
       enabled: Boolean(row.enabled),
       engineId: (row.engine_id as number | null) ?? null,
+      reviewConcurrency: row.review_concurrency as number,
+      providerId: (row.provider_id as number | null) ?? null,
       hasCredential: Boolean(row.credential_id),
       initStatus: (row.init_status as RepoInitStatus) ?? 'ready',
       initError: (row.init_error as string | null) ?? undefined,
@@ -407,6 +423,11 @@ export class RepoService {
   }
 
   private validateInput(input: RepoInput): void {
+    if (input.reviewConcurrency !== undefined &&
+        (!Number.isSafeInteger(input.reviewConcurrency) || input.reviewConcurrency < 1)) {
+      throw new RepoServiceError('评审并发数量必须是正整数');
+    }
+    this.validateProvider(input.providerId);
     if (!['svn', 'git'].includes(input.type)) {
       throw new RepoServiceError('仓库类型必须为 svn 或 git');
     }
@@ -421,6 +442,13 @@ export class RepoService {
     if (input.engineId != null && (!Number.isInteger(input.engineId) ||
       !this.db.prepare('SELECT 1 FROM engine WHERE id = ?').get(input.engineId))) {
       throw new RepoServiceError('评审引擎不存在');
+    }
+  }
+
+  private validateProvider(id: number | null | undefined): void {
+    if (id != null && (!Number.isSafeInteger(id) || id < 1 ||
+        !this.db.prepare('SELECT 1 FROM provider WHERE id = ?').get(id))) {
+      throw new RepoServiceError('指定的评审模型服务不存在');
     }
   }
 }

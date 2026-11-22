@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 import type { CredentialService } from '../crypto/credentialService.js';
-import { resolveProvider } from '../providers/ocrProviderConfig.js';
+import { resolveRepositoryProvider } from '../providers/ocrProviderConfig.js';
 import { MemoryStore, type MemoryEntry, type MemoryKind } from './store.js';
 
 /**
@@ -140,7 +140,7 @@ export async function runDistillation(
   ctx: DistillContext
 ): Promise<{ created: number; merged: number } | null> {
   try {
-    const provider = resolveProvider(db, credentials);
+    const provider = resolveRepositoryProvider(db, credentials, ctx.repoId);
     if (!provider || !provider.apiKey) return null;
     const prompt = buildDistillPrompt(ctx);
     const text = await callLlm({

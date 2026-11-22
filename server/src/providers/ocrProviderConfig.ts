@@ -78,9 +78,10 @@ export function defaultProviderId(db: Database.Database): number | null {
 /** Resolve the provider used for reviews: the default, else the first row. */
 export function resolveProvider(
   db: Database.Database,
-  credentials: CredentialService
+  credentials: CredentialService,
+  providerId?: number
 ): OcrProviderSettings | null {
-  const preferred = defaultProviderId(db);
+  const preferred = providerId ?? defaultProviderId(db);
   const row = (
     preferred !== null
       ? db.prepare('SELECT * FROM provider WHERE id = ?').get(preferred)
@@ -99,6 +100,16 @@ export function resolveProvider(
       ? credentials.reveal(row.credential_id as number)
       : null,
   };
+}
+
+/** Resolve the repository's model, or inherit the global Provider. */
+export function resolveRepositoryProvider(
+  db: Database.Database, credentials: CredentialService, repoId: number
+): OcrProviderSettings | null {
+  const repo = db.prepare('SELECT provider_id FROM repo WHERE id = ?').get(repoId) as
+    | { provider_id: number | null }
+    | undefined;
+  return resolveProvider(db, credentials, repo?.provider_id ?? undefined);
 }
 
 /**

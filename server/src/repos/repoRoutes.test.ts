@@ -39,8 +39,37 @@ describe('repo API integration', () => {
     const body = res.json();
     expect(body.type).toBe('git');
     expect(body.hasCredential).toBe(false);
+    expect(body).toMatchObject({ reviewConcurrency: 2, providerId: null });
     // password must never appear
     expect(JSON.stringify(body)).not.toContain('password');
+  });
+
+  it('saves review settings, preserves them on older updates, and supports inheriting the default model', async () => {
+    execFileSync('git', ['init', '-b', 'main', GIT_REPO_DIR()]);
+    const provider = db.prepare(
+      "INSERT INTO provider (name, api_base, model) VALUES ('repo-model', 'http://localhost:11434/v1', 'model-b')"
+    ).run();
+    const providerId = Number(provider.lastInsertRowid);
+    const app = await buildTestApp(db, credentials);
+    try {
+      const repo = { type: 'git', url: GIT_REPO_DIR(), name: 'repo' };
+      const created = await app.inject({
+        method: 'POST', url: '/api/repos', payload: { ...repo, reviewConcurrency: 3, providerId },
+      });
+      expect(created.statusCode).toBe(201);
+      expect(created.json()).toMatchObject({ reviewConcurrency: 3, providerId });
+      const url = `/api/repos/${created.json().id}`;
+      const update = (payload: object) => app.inject({ method: 'PUT', url, payload: { ...repo, ...payload } });
+      expect((await update({ enabled: false })).json()).toMatchObject({ reviewConcurrency: 3, providerId });
+      for (const invalid of [0, 1.5, '2', Number.MAX_SAFE_INTEGER + 1, null]) {
+        expect((await update({ reviewConcurrency: invalid })).statusCode).toBe(400);
+      }
+      expect((await update({ providerId: providerId + 1 })).statusCode).toBe(400);
+      expect((await update({ reviewConcurrency: 1, providerId: null })).json())
+        .toMatchObject({ reviewConcurrency: 1, providerId: null });
+    } finally {
+      await app.close();
+    }
   });
 
   it('rejects creation when connectivity fails (unreachable url)', async () => {

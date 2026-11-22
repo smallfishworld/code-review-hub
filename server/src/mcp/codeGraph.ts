@@ -53,7 +53,7 @@ export function isReviewIndexName(value: string): boolean {
 /** Keep the generated index name in app data, outside the repository being reviewed. */
 function reviewIndexName(dataDir: string, task: TaskRecord): string {
   const dir = join(dataDir, 'codegraph');
-  const marker = join(dir, workspaceKey(task.repoId, task.sourceVersion));
+  const marker = join(dir, workspaceKey(task.repoId, task.sourceVersion, task.workspaceSlot));
   mkdirSync(dir, { recursive: true });
   try {
     writeFileSync(marker, INDEX_PREFIX + randomUUID(), { flag: 'wx' });
