@@ -1,18 +1,19 @@
-import { mkdirSync, existsSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type Database from 'better-sqlite3';
 import type { CredentialService } from '../crypto/credentialService.js';
 import type { LogService } from '../logs/logService.js';
 import { OcrRunner, workCopyDir } from '../tasks/ocrRunner.js';
-import { svnUpdate, svnInfo, runSvn } from '../vcs/svn.js';
-import { runGit, gitClone, gitFetchBranch, gitPrepareCommit, gitResolveSha } from '../vcs/git.js';
+import { ensureSvnWorkspace, svnUpdate, runSvn } from '../vcs/svn.js';
+import { runGit, ensureGitClone, gitFetchBranch, gitPrepareCommit, gitRemote, gitResolveSha, type GitRunOptions } from '../vcs/git.js';
 import {
   buildOcrConfig,
   prepareOcrHomeSvnConfig,
   resolveProvider,
   type OcrConfigFile,
 } from '../providers/ocrProviderConfig.js';
+import { workspaceKey } from '../repos/sourceVersion.js';
 import { parseOcrReport } from '../tasks/reportService.js';
 import { probeDependency } from '../deps/detector.js';
 import { locateCommand } from '../deps/which.js';
@@ -21,7 +22,7 @@ import type {
   EngineCapabilities,
   EngineProbe,
   EngineRawResult,
-  NormalizedIssue,
+  NormalizedReport,
   PrepareContext,
   PrepareResult,
   ReviewEngine,
@@ -46,8 +47,8 @@ import type {
  */
 
 /** Per-repo isolated HOME for the ocr child process. */
-export function ocrHomeDir(dataDir: string, repoId: number): string {
-  return join(dataDir, 'ocr-home', String(repoId));
+export function ocrHomeDir(dataDir: string, repoId: number, sourceVersion = 0): string {
+  return join(dataDir, 'ocr-home', workspaceKey(repoId, sourceVersion));
 }
 
 /** Features that require ocr >= 1.13. */
@@ -118,10 +119,10 @@ export class OcrEngine implements ReviewEngine {
   }
 
   /** Resolve the ocr binary + version; gate MCP/memory on observed support. */
-  async probe(): Promise<EngineProbe> {
+  async probe(signal?: AbortSignal): Promise<EngineProbe> {
     // Reuse the shipped dependency probe (deps/detector.ts) — it resolves the
     // binary via which() and runs `ocr --version` safely.
-    const dep = await probeDependency('ocr', false, 10_000);
+    const dep = await probeDependency('ocr', false, 10_000, undefined, signal);
     if (!dep.found || !dep.executable) {
       this.degraded = [];
       return { ok: false, degraded: [], version: dep.version, error: dep.error };
@@ -140,6 +141,7 @@ export class OcrEngine implements ReviewEngine {
         const help = await runCapture(located.path, ['review', '--help'], {
           env: process.env as Record<string, string>,
           timeoutMs: 15_000,
+          signal,
         });
         if (!help.output.includes('--background-file')) {
           if (!this.degraded.includes('memory')) this.degraded.push('memory');
@@ -148,14 +150,14 @@ export class OcrEngine implements ReviewEngine {
     } catch {
       // help probe failed: keep version-based gating only
     }
+    signal?.throwIfAborted();
     return { ok: true, degraded: [...this.degraded], version };
   }
 
   /** Prepare the working copy at the task node + collect the change set. */
   async prepare(ctx: PrepareContext): Promise<PrepareResult> {
-    mkdirSync(join(this.opts.dataDir, 'reports'), { recursive: true });
     const repoId = ctx.task.repoId;
-    const home = ocrHomeDir(this.opts.dataDir, repoId);
+    const home = ocrHomeDir(this.opts.dataDir, repoId, ctx.task.sourceVersion);
     // The ocr HOME must exist BEFORE the SVN credential-seeding checkout so
     // svn writes into the store the ocr child will read (see
     // prepareOcrHomeSvnConfig). Git has no HOME dependency.
@@ -171,6 +173,7 @@ export class OcrEngine implements ReviewEngine {
         await this.prepareGitClone(ctx);
       }
     } catch (err) {
+      ctx.signal?.throwIfAborted();
       const reason = err instanceof Error ? err.message : String(err);
       this.opts.logs?.error('task', `#${ctx.task.id} 工作副本准备失败: ${reason}`);
       throw new Error(`工作副本准备失败: ${reason}`, { cause: err });
@@ -179,6 +182,7 @@ export class OcrEngine implements ReviewEngine {
     try {
       return await this.collectChanges(ctx, homeEnv);
     } catch (err) {
+      ctx.signal?.throwIfAborted();
       // Memory retrieval input is best-effort: never fail the review over it.
       const reason = err instanceof Error ? err.message : String(err);
       this.opts.logs?.info(
@@ -194,7 +198,8 @@ export class OcrEngine implements ReviewEngine {
     ctx: PrepareContext,
     homeEnv: Record<string, string>
   ): Promise<PrepareResult> {
-    const wcDir = workCopyDir(this.opts.dataDir, ctx.task.repoId);
+    const wcDir = workCopyDir(this.opts.dataDir, ctx.task.repoId, ctx.task.sourceVersion);
+    const opts = this.vcsOptions(ctx);
     // svn diff --summarize prints ABSOLUTE paths when given an absolute
     // target; memory scope matching expects wc-relative paths, so normalize
     // everything (git diff-tree already prints repo-relative).
@@ -208,7 +213,7 @@ export class OcrEngine implements ReviewEngine {
       const out = await runSvn(
         ['diff', '--summarize', '--change', rev, wcDir],
         { username: ctx.auth.username, password: ctx.auth.password },
-        { timeoutMs: 2 * 60_000, env: homeEnv }
+        { ...opts, timeoutMs: 2 * 60_000, env: homeEnv }
       );
       const files = out.stdout
         .split(/\r?\n/)
@@ -216,79 +221,59 @@ export class OcrEngine implements ReviewEngine {
         .filter((l) => l.length > 0);
       return { changedFiles: files, identifiers: sampleIdentifiers(files, []) };
     }
-    // Git: files of the commit; identifiers sampled from added diff lines.
-    const full = validatedNode('git', (await gitResolveSha(wcDir, ctx.task.node)) ?? ctx.task.node);
-    const filesOut = await runGit(['diff-tree', '--no-commit-id', '--name-only', '-r', '--root', full], {
+    // Compare merge commits against their first parent, as the monitor does.
+    const gitOpts = {
+      ...opts,
       cwd: wcDir,
       timeoutMs: 2 * 60_000,
-    });
-    const files = filesOut.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      env: gitRemote(ctx.auth.url, ctx.auth).env,
+    };
+    const full = validatedNode('git', (await gitResolveSha(wcDir, ctx.task.node, gitOpts)) ?? ctx.task.node);
+    const parent = await gitResolveSha(wcDir, `${full}^1`, gitOpts);
+    const pathArgs = parent
+      ? ['diff', '--name-only', '-z', parent, full]
+      : ['diff-tree', '--no-commit-id', '--name-only', '-r', '-z', '--root', full];
+    const filesOut = await runGit(pathArgs, gitOpts);
+    const files = filesOut.stdout.split('\0').filter(Boolean);
     let addedLines: string[] = [];
-    try {
-      const diff = await runGit(['diff', '-U0', `${full}^`, full], {
-        cwd: wcDir,
-        timeoutMs: 2 * 60_000,
-      });
+    if (parent) {
+      const diff = await runGit(['diff', '-U0', parent, full], gitOpts);
       addedLines = diff.stdout.split(/\r?\n/).filter((l) => l.startsWith('+') && !l.startsWith('+++'));
-    } catch {
-      // root commit has no parent: identifiers fall back to file names
     }
     return { changedFiles: files, identifiers: sampleIdentifiers(files, addedLines) };
   }
 
+  private vcsOptions(ctx: PrepareContext): GitRunOptions {
+    return {
+      signal: ctx.signal,
+      onSpawn: (child) => ctx.onSpawn({ kill: () => { if (!ctx.signal?.aborted) child.kill(); } }),
+    };
+  }
+
   /** Bootstrap + update the SVN working copy to the task revision. */
-  private async prepareSvnWorkCopy(
-    ctx: PrepareContext,
-    homeEnv: Record<string, string>
-  ): Promise<void> {
-    const task = ctx.task;
-    const wcDir = workCopyDir(this.opts.dataDir, task.repoId);
-    const svnAuth = { username: ctx.auth.username, password: ctx.auth.password };
-    if (!existsSync(join(wcDir, '.svn'))) {
-      mkdirSync(wcDir, { recursive: true });
-      // Full checkout: ocr reviews complete files ("Full-File Scan" — it
-      // reads surrounding code via `svn cat`, not just the diff), so the
-      // working copy must contain the whole tree.
-      //
-      // cacheAuth=true: the only server-touching call under the ocr HOME —
-      // svn writes credentials to its store ONLY during an authenticated
-      // server exchange; ocr's own svn calls run with NO auth flags under the
-      // same redirected HOME and would hang forever on an invisible auth
-      // prompt without a seeded store.
-      await runSvn(['checkout', ctx.auth.url, wcDir], svnAuth, {
-        onSpawn: (c) => ctx.onSpawn({ kill: () => c.kill() }),
-        timeoutMs: 30 * 60_000,
-        cacheAuth: true,
-        env: homeEnv,
-      });
-      await svnInfo(wcDir, svnAuth);
-    }
-    const rev = validatedNode('svn', task.node);
-    await svnUpdate(wcDir, Number(rev), svnAuth, {
-      onSpawn: (c) => ctx.onSpawn({ kill: () => c.kill() }),
-    });
+  private async prepareSvnWorkCopy(ctx: PrepareContext, env: Record<string, string>): Promise<void> {
+    const wcDir = workCopyDir(this.opts.dataDir, ctx.task.repoId, ctx.task.sourceVersion);
+    const opts = { ...this.vcsOptions(ctx), env };
+    await ensureSvnWorkspace(wcDir, ctx.auth.url, ctx.auth, opts);
+    const rev = validatedNode('svn', ctx.task.node);
+    await svnUpdate(wcDir, Number(rev), ctx.auth, opts);
   }
 
   /** Bootstrap + fetch + checkout the git clone at the task commit. */
   private async prepareGitClone(ctx: PrepareContext): Promise<void> {
-    const task = ctx.task;
-    const wcDir = workCopyDir(this.opts.dataDir, task.repoId);
-    const auth = { username: ctx.auth.username, password: ctx.auth.password };
-    if (!existsSync(join(wcDir, '.git'))) {
-      mkdirSync(join(wcDir, '..'), { recursive: true });
-      await gitClone(ctx.auth.url, wcDir, auth);
-    }
-    await gitFetchBranch(wcDir, ctx.auth.url, ctx.auth.branch ?? 'main', auth);
-    // node may be a short sha; resolve via the local repo
-    const full = (await gitResolveSha(wcDir, task.node)) ?? task.node;
-    await gitPrepareCommit(wcDir, ctx.auth.url, full, auth);
+    const wcDir = workCopyDir(this.opts.dataDir, ctx.task.repoId, ctx.task.sourceVersion);
+    const opts = this.vcsOptions(ctx);
+    await ensureGitClone(wcDir, ctx.auth.url, ctx.auth, opts);
+    await gitFetchBranch(wcDir, ctx.auth.url, ctx.auth.branch ?? 'main', ctx.auth, opts);
+    const full = (await gitResolveSha(wcDir, ctx.task.node, opts)) ?? ctx.task.node;
+    await gitPrepareCommit(wcDir, ctx.auth.url, full, ctx.auth, opts);
   }
 
   /** Execute one ocr review run; returns the report path on success. */
   async review(req: ReviewRequest, ctx: PrepareContext): Promise<EngineRawResult & { reportPath?: string }> {
     const commit = validatedNode(ctx.auth.type, ctx.task.node);
-    const wcDir = workCopyDir(this.opts.dataDir, ctx.task.repoId);
-    const reportPath = join(this.opts.dataDir, 'reports', `${ctx.task.id}.json`);
+    const wcDir = workCopyDir(this.opts.dataDir, ctx.task.repoId, ctx.task.sourceVersion);
+    ctx.signal?.throwIfAborted();
     const args = [
       'review',
       '--repo',
@@ -298,7 +283,7 @@ export class OcrEngine implements ReviewEngine {
       '--format',
       'json',
       '--output',
-      reportPath,
+      req.reportPath,
     ];
 
     // Memory context (skipped when unsupported): real ocr 1.13.x exposes
@@ -316,8 +301,11 @@ export class OcrEngine implements ReviewEngine {
 
     try {
       const result = await this.runOcrWithConfig(args, ctx, req.mcpServers ?? null);
-      if (result.exitCode === 0 || !useRequirement) return result;
-      // File form unsupported -> retry once with inline text (design D4).
+      ctx.signal?.throwIfAborted();
+      const unsupported = /^(?:Error:\s*)?(?:unknown (?:flag|option)|unrecognized option)[^\r\n]*--background-file\b/m;
+      if (result.exitCode === 0 || !useRequirement || process.platform === 'win32' ||
+          !unsupported.test(result.error ?? '')) return result;
+      // Retry only when the CLI rejected the file option before doing any work.
       const inlineArgs = args.slice(0, -2);
       inlineArgs.push('--background', req.requirementText!.slice(0, 6000));
       const retry = await this.runOcrWithConfig(inlineArgs, ctx, req.mcpServers ?? null);
@@ -338,10 +326,11 @@ export class OcrEngine implements ReviewEngine {
     mcpServers: Record<string, unknown> | null
   ): Promise<EngineRawResult & { reportPath?: string }> {
     const task = ctx.task;
-    const home = ocrHomeDir(this.opts.dataDir, task.repoId);
+    const home = ocrHomeDir(this.opts.dataDir, task.repoId, task.sourceVersion);
     this.writeHomeConfig(home, mcpServers);
-    const env = { HOME: home, USERPROFILE: home };
-    return this.runner.runOcr(args, task.id, ctx.onSpawn, env);
+    const homeEnv = { HOME: home, USERPROFILE: home };
+    const env = ctx.auth.type === 'git' ? gitRemote(ctx.auth.url, ctx.auth, homeEnv).env : homeEnv;
+    return this.runner.runOcr(args, task.id, ctx.onSpawn, env, ctx.signal);
   }
 
   /**
@@ -364,14 +353,13 @@ export class OcrEngine implements ReviewEngine {
   }
 
   /** Map ocr's native JSON to the unified issue model (tolerant per item). */
-  normalize(raw: string): { issues: NormalizedIssue[] } {
-    let parsed;
-    try {
-      parsed = parseOcrReport(raw);
-    } catch {
-      return { issues: [] };
+  normalize(raw: string): NormalizedReport {
+    const parsed = parseOcrReport(raw, true);
+    if (parsed.status && /^(?:error|fail(?:ed|ure)?|cancelled)$/i.test(parsed.status)) {
+      throw new Error(parsed.message ?? `ocr 报告状态为 ${parsed.status}`);
     }
     return {
+      summary: parsed.summary,
       issues: parsed.comments.map((c) => ({
         file: c.path,
         startLine: c.startLine,

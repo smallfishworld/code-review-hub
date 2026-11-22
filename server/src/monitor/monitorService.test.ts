@@ -472,6 +472,43 @@ describe('Git monitor (4.2/4.3/4.4)', () => {
     expect(tasks().map((t) => t.node).sort()).toEqual([shas[1], shas[2]].sort());
   });
 
+  it('backtracks through the root and then resumes normal polling', async () => {
+    const { url, shas } = makeGitRepo([{ author: 'alice', files: { 'a.txt': '1' } }]);
+    const repoId = addRepo('git', url, 'main');
+    const ruleId = addRule(repoId, { backtrack: 3 });
+    await monitor.enableRule(ruleId);
+    expect(monitor.status(ruleId)[0].lastNode).toBe('');
+    await monitor.pollRule(ruleId);
+    await monitor.pollRule(ruleId);
+    const next = gitCommit(url, 'bob', { 'b.txt': '2' });
+    await monitor.pollRule(ruleId);
+    await queue.idle();
+    expect(tasks().map((task) => task.node).reverse()).toEqual([shas[0], next]);
+    expect(monitor.status(ruleId)[0]).toMatchObject({ lastNode: next, lastPollError: null });
+  });
+
+  it('matches paths changed by a merge conflict resolution', async () => {
+    const file = 'src/core/a.cpp';
+    const { url } = makeGitRepo([{ author: 'alice', files: { [file]: 'base\n' } }]);
+    const repoId = addRepo('git', url, 'main');
+    const ruleId = addRule(repoId, { authors: ['merger'], paths: ['src/core/'] });
+    await monitor.enableRule(ruleId);
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: url, stdio: 'pipe' });
+    git('checkout', '-b', 'feature');
+    gitCommit(url, 'dev', { [file]: 'feature\n' });
+    git('checkout', 'main');
+    gitCommit(url, 'dev', { [file]: 'main\n' });
+    expect(() => git('-c', 'user.name=merger', '-c', 'user.email=m@t', 'merge', 'feature')).toThrow();
+    const merge = gitCommit(url, 'merger', { [file]: 'conflict resolved with new content\n' });
+    expect(git('rev-list', '--parents', '-n', '1', merge).toString().trim().split(' ')).toHaveLength(3);
+
+    await monitor.pollRule(ruleId);
+    await queue.idle();
+    expect(tasks()).toHaveLength(1);
+    expect(tasks()[0]).toMatchObject({ node: merge, monitorRuleId: ruleId });
+    expect(logs(ruleId)).toContainEqual(expect.objectContaining({ node: merge, action: 'triggered' }));
+  });
+
   it('git poll failure keeps position and recovers on next poll', async () => {
     const { url } = makeGitRepo([{ author: 'alice', files: { 'a.txt': '1' } }]);
     const repoId = addRepo('git', url, 'main');

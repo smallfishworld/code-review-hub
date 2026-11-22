@@ -1,16 +1,18 @@
 import type Database from 'better-sqlite3';
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import type { CredentialService } from '../crypto/credentialService.js';
 import type { LogService } from '../logs/logService.js';
-import type { TaskRecord } from '../tasks/taskQueue.js';
+import type { TaskExecutionResult, TaskRecord, TaskSpawnHandler } from '../tasks/taskQueue.js';
 import { loadRepoAuth } from '../tasks/ocrRunner.js';
-import { createEngine, type EngineRow } from './registry.js';
+import { createEngine, getEngineRow, type EngineRow } from './registry.js';
 import { resolveEngineForRepo, EngineResolveError } from './resolver.js';
-import type { PrepareResult, ReviewEngine } from './types.js';
+import type { PrepareContext, PrepareResult, ReviewEngine } from './types.js';
 import { collectEffectiveServers, buildOcrMcpServers, recordMcpInjection } from '../mcp/injector.js';
 import { MemoryStore } from '../memory/store.js';
 import { MemoryRetrieval } from '../memory/retrieval.js';
 import { renderMemoryContext, recordMemoryInjection } from '../memory/inject.js';
-import { runArchivalScan, bumpReviewCount, runCompaction } from '../memory/evolve.js';
+import { runArchivalScan } from '../memory/evolve.js';
 
 /**
  * The TaskQueue executor backed by the pluggable engine pipeline:
@@ -19,7 +21,7 @@ import { runArchivalScan, bumpReviewCount, runCompaction } from '../memory/evolv
  *   -> prepare (workspace + change collection)
  *   -> memory retrieval + injection audit (engine must support it)
  *   -> MCP collect + config-inject (engine must support it)
- *   -> review -> review-count bookkeeping (compaction trigger)
+ *   -> review -> validate and normalize its report
  *
  * All auxiliary steps (memory/MCP) are best-effort: they never turn a working
  * review into a failed task (spec: 记忆为空或引擎不支持 / 不支持 MCP 的引擎).
@@ -38,22 +40,36 @@ export class EngineExecutor {
   /** Executor callback for TaskQueue. */
   execute = async (
     task: TaskRecord,
-    onSpawn: (child: { kill: (signal?: string) => void }) => void
-  ): Promise<{ exitCode: number; error?: string }> => {
+    onSpawn: TaskSpawnHandler,
+    signal: AbortSignal
+  ): Promise<TaskExecutionResult> => {
+    signal.throwIfAborted();
+    const auth = loadRepoAuth(this.db, this.credentials, task.repoId, task.sourceVersion);
     let engine: ReviewEngine;
     let row: EngineRow;
     try {
-      const resolved = resolveEngineForRepo(this.db, task.repoId);
-      row = resolved.row;
+      if (task.engineSelectionError) throw new EngineResolveError(task.engineSelectionError);
+      if (task.engineId === undefined) {
+        // Tasks queued before provenance was persisted use repo/default selection.
+        row = resolveEngineForRepo(this.db, task.repoId, task.monitorRuleId).row;
+        this.db.prepare('UPDATE task SET engine_id = ? WHERE id = ?').run(row.id, task.id);
+      } else {
+        const selected = getEngineRow(this.db, task.engineId);
+        if (!selected) throw new EngineResolveError(`评审引擎 #${task.engineId} 不存在`);
+        if (!selected.enabled) throw new EngineResolveError(`评审引擎 ${selected.name} 已停用`);
+        row = selected;
+      }
       engine = createEngine(row, this.db, this.credentials, this.opts);
     } catch (err) {
       const msg = err instanceof EngineResolveError ? err.message : String(err);
       this.opts.logs?.error('task', `#${task.id} 引擎解析失败: ${msg}`);
       return { exitCode: -1, error: msg };
     }
-    this.db.prepare('UPDATE task SET engine_id = ? WHERE id = ?').run(row.id, task.id);
-
-    const probe = await engine.probe();
+    if (!engine.capabilities.vcs.includes(auth.type)) {
+      return { exitCode: -1, error: `引擎 ${engine.name} 不支持 ${auth.type} 仓库` };
+    }
+    const probe = await engine.probe(signal);
+    signal.throwIfAborted();
     if (!probe.ok) {
       const msg = `引擎 ${row.name} 不可用: ${probe.error ?? '未知原因'}`;
       this.opts.logs?.error('task', `#${task.id} ${msg}`);
@@ -66,14 +82,15 @@ export class EngineExecutor {
       );
     }
 
-    const auth = loadRepoAuth(this.db, this.credentials, task.repoId);
+    const context: PrepareContext = { task, auth, onSpawn, signal };
     let changes: PrepareResult;
     try {
-      changes = await engine.prepare({ task, auth, onSpawn });
+      changes = await engine.prepare(context);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return { exitCode: -1, error: msg };
     }
+    signal.throwIfAborted();
 
     // 记忆检索注入（引擎支持且未被版本降级时）
     let requirementText: string | undefined;
@@ -111,19 +128,33 @@ export class EngineExecutor {
       this.opts.logs?.info('task', `#${task.id} MCP 注入失败（不影响评审）: ${String(err)}`);
     }
 
-    const result = await engine.review(
-      { task, reportPath: '', requirementText, mcpServers, degraded: probe.degraded },
-      { task, auth, onSpawn }
-    );
-
-    if (result.exitCode === 0) {
+    signal.throwIfAborted();
+    const reportsDir = join(this.opts.dataDir, 'reports');
+    mkdirSync(reportsDir, { recursive: true });
+    const stagingDir = mkdtempSync(join(reportsDir, `.${task.id}-`));
+    const reportPath = join(stagingDir, 'report.json');
+    try {
+      const result = await engine.review(
+        { task, reportPath, requirementText, mcpServers, degraded: probe.degraded },
+        context
+      );
+      signal.throwIfAborted();
+      if (result.exitCode !== 0) return result;
       try {
-        bumpReviewCount(this.db, task.repoId);
-        runCompaction(this.db, this.memory, task.repoId);
-      } catch {
-        // 演化记账失败不影响任务结果
+        const normalized = engine.normalize(readFileSync(reportPath, 'utf8'));
+        const rawPath = join(reportsDir, `${task.id}.json`);
+        renameSync(reportPath, rawPath);
+        return { exitCode: 0, report: { rawPath, engineName: engine.name, ...normalized } };
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        return { exitCode: -1, error: `评审报告无效: ${reason}` };
+      }
+    } finally {
+      try {
+        rmSync(stagingDir, { recursive: true, force: true });
+      } catch (err) {
+        this.opts.logs?.warn('task', `#${task.id} 清理报告临时目录失败: ${String(err)}`);
       }
     }
-    return { exitCode: result.exitCode, error: result.error };
   };
 }

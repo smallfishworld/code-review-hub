@@ -1,9 +1,11 @@
 import type Database from 'better-sqlite3';
-import { readFileSync, existsSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { matchSuppressions } from '../memory/suppressFilter.js';
+import type { NormalizedReport } from '../engines/types.js';
 
 /**
- * Parses ocr's JSON output and persists the report index.
+ * Persists normalized reports and can rebuild indexes from historical ocr JSON.
  *
  * ocr (open-code-review-svn) writes a `jsonOutput` object:
  *   { status, message?, summary?: {files_reviewed, comments, total_tokens,
@@ -12,9 +14,8 @@ import { matchSuppressions } from '../memory/suppressFilter.js';
  *       end_line, category?, severity? }], ... }
  *
  * The raw JSON is already stored at `data/reports/<task-id>.json` by the
- * runner (ocr's --output flag). This module indexes it into `report` +
- * `report_issue`. Parse failures keep the raw file and mark
- * parsed_ok = 0 ("succeeded-but-raw").
+ * runner (ocr's --output flag). For historical reports, parse failures
+ * keep the raw file and mark parsed_ok = 0.
  */
 
 export interface ReportComment {
@@ -36,8 +37,8 @@ export interface ParsedReport {
   comments: ReportComment[];
 }
 
-/** Tolerant parse of an ocr JSON report; throws only on unreadable JSON. */
-export function parseOcrReport(rawJson: string): ParsedReport {
+/** Tolerant per-issue parsing, with optional validation for new engine output. */
+export function parseOcrReport(rawJson: string, requireReview = false): ParsedReport {
   const data = JSON.parse(rawJson) as Record<string, unknown>;
   if (data === null || typeof data !== 'object' || Array.isArray(data)) {
     throw new Error('报告根节点不是 JSON 对象');
@@ -60,6 +61,9 @@ export function parseOcrReport(rawJson: string): ParsedReport {
     data.summary !== null && typeof data.summary === 'object' && !Array.isArray(data.summary)
       ? (data.summary as Record<string, unknown>)
       : undefined;
+  if (requireReview && !Array.isArray(data.comments) && !summaryObj) {
+    throw new Error('ocr 报告缺少评审摘要或意见列表');
+  }
   const filesReviewed = typeof summaryObj?.files_reviewed === 'number' ? summaryObj.files_reviewed : undefined;
 
   let summary: string;
@@ -90,6 +94,11 @@ export interface StoredReport {
   /** Engine that produced the report (null = historical task). */
   engine: string | null;
   createdAt: string;
+}
+
+export interface CompletedReviewReport extends NormalizedReport {
+  rawPath: string;
+  engineName: string;
 }
 
 export interface StoredIssue {
@@ -124,6 +133,35 @@ function rowToReport(row: Record<string, unknown>): StoredReport {
 export class ReportService {
   constructor(private readonly db: Database.Database) {}
 
+  /** Persist the adapter's normalized result as part of the task's terminal transaction. */
+  indexNormalizedReport(taskId: number, report: CompletedReviewReport): StoredReport {
+    if (!statSync(report.rawPath, { throwIfNoEntry: false })?.isFile()) throw new Error('报告文件不存在');
+    const comments = report.issues.map((issue): ReportComment => ({
+      path: issue.file,
+      content: issue.description,
+      suggestion: issue.suggestion,
+      startLine: issue.startLine,
+      endLine: issue.endLine,
+      severity: issue.severity,
+      category: issue.category,
+    }));
+    this.upsert(taskId, report.rawPath, report.summary, comments.length, true, comments, report.engineName);
+    this.updateSuppressedCount(taskId);
+    return this.get(taskId)!;
+  }
+
+  /** Reconcile tasks completed by earlier versions before report indexing was atomic. */
+  recoverLegacyIndexes(dataDir: string): void {
+    const tasks = this.db.prepare(
+      `SELECT task.id FROM task LEFT JOIN report ON report.task_id = task.id
+       WHERE task.status = 'succeeded' AND report.id IS NULL`
+    ).all() as { id: number }[];
+    for (const { id } of tasks) {
+      if (this.indexTaskReport(id, join(dataDir, 'reports', `${id}.json`))) continue;
+      this.db.prepare("UPDATE task SET status = 'failed', error = '历史评审报告缺失' WHERE id = ?").run(id);
+    }
+  }
+
   /**
    * Parse the raw report file of a finished task and index it, then apply
    * deterministic suppression (project-memory spec): issues matching an
@@ -144,13 +182,8 @@ export class ReportService {
     try {
       const parsed = parseOcrReport(raw);
       const engineName = this.engineNameOf(taskId);
-      const stored = this.upsert(taskId, rawPath, parsed.summary, parsed.comments.length, true, parsed.comments, engineName);
-      const suppressedCount = this.applySuppression(taskId);
-      if (suppressedCount > 0 && stored) {
-        this.db
-          .prepare('UPDATE report SET issue_count = MAX(0, issue_count - ?) WHERE task_id = ?')
-          .run(suppressedCount, taskId);
-      }
+      this.upsert(taskId, rawPath, parsed.summary, parsed.comments.length, true, parsed.comments, engineName);
+      this.updateSuppressedCount(taskId);
       return this.get(taskId);
     } catch {
       // succeeded-but-raw: keep the file, index as unparsed
@@ -163,6 +196,14 @@ export class ReportService {
         undefined,
         this.engineNameOf(taskId)
       );
+    }
+  }
+
+  private updateSuppressedCount(taskId: number): void {
+    const count = this.applySuppression(taskId);
+    if (count > 0) {
+      this.db.prepare('UPDATE report SET issue_count = MAX(0, issue_count - ?) WHERE task_id = ?')
+        .run(count, taskId);
     }
   }
 

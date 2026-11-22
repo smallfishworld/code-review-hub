@@ -20,6 +20,7 @@ export interface MonitorRuleInput {
   pathPrefixes?: string[];
   backtrackNodes?: number;
   enabled?: boolean;
+  engineId?: number | null;
 }
 
 export class MonitorRuleError extends Error {
@@ -39,6 +40,7 @@ interface RuleRow {
   path_prefixes: string;
   backtrack_nodes: number;
   enabled: number;
+  engine_id: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -55,6 +57,7 @@ export function buildMonitorRoutes(
     pathPrefixes: safeArray(row.path_prefixes),
     backtrackNodes: row.backtrack_nodes,
     enabled: row.enabled === 1,
+    engineId: row.engine_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   });
@@ -63,6 +66,10 @@ export function buildMonitorRoutes(
     db.prepare('SELECT * FROM monitor_rule WHERE repo_id = ?').get(repoId) as RuleRow | undefined;
 
   const validate = (input: MonitorRuleInput) => {
+    if (input.engineId != null && (!Number.isInteger(input.engineId) ||
+      !db.prepare('SELECT 1 FROM engine WHERE id = ?').get(input.engineId))) {
+      throw new MonitorRuleError('评审引擎不存在');
+    }
     if (input.intervalSeconds !== undefined) {
       if (!Number.isInteger(input.intervalSeconds) || input.intervalSeconds < 30) {
         throw new MonitorRuleError('轮询间隔必须是不小于 30 的整数（秒）');
@@ -115,20 +122,21 @@ export function buildMonitorRoutes(
       const authors = JSON.stringify(input.authorWhitelist ?? safeArray(existing?.author_whitelist ?? '[]'));
       const paths = JSON.stringify(input.pathPrefixes ?? safeArray(existing?.path_prefixes ?? '[]'));
       const backtrack = input.backtrackNodes ?? existing?.backtrack_nodes ?? 0;
+      const engineId = input.engineId === undefined ? existing?.engine_id ?? null : input.engineId;
 
       if (existing) {
         db.prepare(
           `UPDATE monitor_rule
-           SET interval_seconds = ?, author_whitelist = ?, path_prefixes = ?, backtrack_nodes = ?,
+           SET interval_seconds = ?, author_whitelist = ?, path_prefixes = ?, backtrack_nodes = ?, engine_id = ?,
                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
            WHERE id = ?`
-        ).run(interval, authors, paths, backtrack, existing.id);
+        ).run(interval, authors, paths, backtrack, engineId, existing.id);
       } else {
         db.prepare(
           `INSERT INTO monitor_rule
-             (repo_id, interval_seconds, author_whitelist, path_prefixes, backtrack_nodes, enabled)
-           VALUES (?, ?, ?, ?, ?, 0)`
-        ).run(id, interval, authors, paths, backtrack);
+             (repo_id, interval_seconds, author_whitelist, path_prefixes, backtrack_nodes, engine_id, enabled)
+           VALUES (?, ?, ?, ?, ?, ?, 0)`
+        ).run(id, interval, authors, paths, backtrack, engineId);
       }
       const row = getRuleByRepo(id)!;
       // re-arm the timer with the new interval when enabled

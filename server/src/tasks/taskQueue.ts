@@ -1,6 +1,9 @@
 import type Database from 'better-sqlite3';
 import { EventEmitter } from 'node:events';
 import type { LogService } from '../logs/logService.js';
+import { repoSourceVersion } from '../repos/sourceVersion.js';
+import { resolveEngineForRepo } from '../engines/resolver.js';
+import type { CompletedReviewReport, ReportService } from './reportService.js';
 
 export type TaskStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 export type TaskTrigger = 'manual' | 'auto';
@@ -11,12 +14,29 @@ export interface TaskRecord {
   node: string;
   trigger: TaskTrigger;
   status: TaskStatus;
+  sourceVersion?: number;
+  monitorRuleId?: number;
+  engineId?: number;
+  engineSelectionError?: string;
   author?: string;
   error?: string;
   ocrExitCode?: number;
   startedAt?: string;
   finishedAt?: string;
   createdAt: string;
+}
+
+export type TaskSpawnHandler = (child: { kill: (signal?: string) => void }) => void;
+
+export interface TaskExecutionResult {
+  exitCode: number;
+  error?: string;
+  report?: CompletedReviewReport;
+}
+
+interface EnqueueContext {
+  sourceVersion?: number;
+  monitorRuleId?: number;
 }
 
 /** Task reached a terminal state. Payload carries the final record. */
@@ -32,6 +52,10 @@ function rowToTask(row: Record<string, unknown>): TaskRecord {
     node: row.node as string,
     trigger: row.trigger as TaskTrigger,
     status: row.status as TaskStatus,
+    sourceVersion: row.source_version as number,
+    monitorRuleId: (row.monitor_rule_id as number | null) ?? undefined,
+    engineId: (row.engine_id as number | null) ?? undefined,
+    engineSelectionError: (row.engine_selection_error as string | null) ?? undefined,
     author: (row.author as string | null) ?? undefined,
     error: (row.error as string | null) ?? undefined,
     ocrExitCode: (row.ocr_exit_code as number | null) ?? undefined,
@@ -53,7 +77,7 @@ function rowToTask(row: Record<string, unknown>): TaskRecord {
  */
 export class TaskQueue extends EventEmitter {
   private runningRepos = new Set<number>();
-  private cancelledTasks = new Set<number>();
+  private readonly runningControllers = new Map<number, AbortController>();
   /** Live kill handles of running tasks (task id -> latest spawned child). */
   private runningHandles = new Map<number, { kill: (signal?: string) => void }>();
   private draining = false;
@@ -68,10 +92,11 @@ export class TaskQueue extends EventEmitter {
 
   constructor(
     private readonly db: Database.Database,
-    private readonly executor: (task: TaskRecord, onSpawn: (child: { kill: (signal?: string) => void }) => void) => Promise<{ exitCode: number; error?: string }>,
+    private readonly executor: (task: TaskRecord, onSpawn: TaskSpawnHandler, signal: AbortSignal) => Promise<TaskExecutionResult>,
     private readonly maxConcurrentRepos = 2,
     /** Runtime log sink (web console); task lifecycle lands here. */
-    private readonly logs?: LogService
+    private readonly logs?: LogService,
+    private readonly reports?: ReportService
   ) {
     super();
   }
@@ -83,6 +108,19 @@ export class TaskQueue extends EventEmitter {
 
   /** Re-arm after a service restart: stale running -> failed, queued -> requeued. */
   recoverFromRestart(): void {
+    if (this.reports) {
+      const staged = this.db.prepare(
+        "SELECT id, pending_report FROM task WHERE status = 'running' AND pending_report IS NOT NULL ORDER BY id"
+      ).all() as { id: number; pending_report: string }[];
+      for (const row of staged) {
+        try {
+          this.commitReport(row.id, JSON.parse(row.pending_report) as CompletedReviewReport);
+        } catch (err) {
+          this.finish(row.id, 'failed', this.reportError(err), 0);
+        }
+        this.emit('completed', { task: this.get(row.id) } satisfies TaskCompletedEvent);
+      }
+    }
     this.db
       .prepare(
         `UPDATE task
@@ -95,7 +133,10 @@ export class TaskQueue extends EventEmitter {
   }
 
   /** Enqueue a task. Deduped by (repo, node, trigger) UNIQUE, plus terminal-state handling. */
-  enqueue(repoId: number, node: string, trigger: TaskTrigger, author?: string): TaskRecord {
+  enqueue(
+    repoId: number, node: string, trigger: TaskTrigger, author?: string, context: EnqueueContext = {}
+  ): TaskRecord {
+    const sourceVersion = context.sourceVersion ?? repoSourceVersion(this.db, repoId) ?? 0;
     // Dedup on ACTIVE tasks only (queued/running, partial unique index). A
     // terminal row (succeeded/failed/cancelled) is history, not a lock: the
     // same node can be re-triggered and gets a fresh row. Without this, a
@@ -104,29 +145,43 @@ export class TaskQueue extends EventEmitter {
     const active = this.db
       .prepare(
         `SELECT * FROM task
-         WHERE repo_id = ? AND node = ? AND trigger = ? AND status IN ('queued','running')`
+         WHERE repo_id = ? AND source_version = ? AND node = ? AND trigger = ? AND status IN ('queued','running')`
       )
-      .get(repoId, node, trigger) as Record<string, unknown> | undefined;
+      .get(repoId, sourceVersion, node, trigger) as Record<string, unknown> | undefined;
     if (active) return rowToTask(active);
+    const monitorRuleId = trigger === 'auto' ? context.monitorRuleId : undefined;
+    let engineId: number | null = null;
+    let engineSelectionError: string | null = null;
+    try {
+      engineId = resolveEngineForRepo(this.db, repoId, monitorRuleId).row.id;
+    } catch (err) {
+      engineSelectionError = err instanceof Error ? err.message : String(err);
+    }
     const info = this.db
       .prepare(
-        `INSERT INTO task (repo_id, node, trigger, status, author) VALUES (?, ?, ?, 'queued', ?)`
+        `INSERT INTO task (repo_id, source_version, node, trigger, status, author, monitor_rule_id, engine_id, engine_selection_error)
+         VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?)`
       )
-      .run(repoId, node, trigger, author ?? null);
+      .run(repoId, sourceVersion, node, trigger, author ?? null, monitorRuleId ?? null, engineId, engineSelectionError);
     const record = this.get(Number(info.lastInsertRowid));
     this.kick();
     return record;
   }
 
-  /** Queue a task only if this repo+node has never been reviewed (any trigger). */
-  enqueueIfNew(repoId: number, node: string, trigger: TaskTrigger, author?: string): TaskRecord | null {
+  /** Manual retries can resume a failed review. Automatic polling deduplicates every attempt. */
+  enqueueIfNew(
+    repoId: number, node: string, trigger: TaskTrigger, author?: string, context: EnqueueContext = {}
+  ): TaskRecord | null {
+    const sourceVersion = context.sourceVersion ?? repoSourceVersion(this.db, repoId) ?? 0;
     const prior = this.db
       .prepare(
-        `SELECT id FROM task WHERE repo_id = ? AND node = ? AND status != 'cancelled'`
+        `SELECT id FROM task
+         WHERE repo_id = ? AND source_version = ? AND node = ? AND status != 'cancelled'
+           AND (? = 'auto' OR status != 'failed')`
       )
-      .get(repoId, node);
+      .get(repoId, sourceVersion, node, trigger);
     if (prior) return null;
-    return this.enqueue(repoId, node, trigger, author);
+    return this.enqueue(repoId, node, trigger, author, { ...context, sourceVersion });
   }
 
   cancel(taskId: number): boolean {
@@ -144,17 +199,15 @@ export class TaskQueue extends EventEmitter {
       return true;
     }
     if (task.status === 'running') {
-      this.cancelledTasks.add(taskId);
+      const controller = this.runningControllers.get(taskId);
+      if (!controller) return false;
+      controller.abort(new Error('cancelled by user'));
       // kill the live child immediately (if any); onSpawn also re-checks
-      // cancelledTasks for the spawn-vs-cancel race.
+      // the cancellation signal for the spawn-vs-cancel race.
       this.runningHandles.get(taskId)?.kill();
       return true;
     }
     return false;
-  }
-
-  isCancelled(taskId: number): boolean {
-    return this.cancelledTasks.has(taskId);
   }
 
   get(taskId: number): TaskRecord {
@@ -272,18 +325,6 @@ export class TaskQueue extends EventEmitter {
           )
           .get(nextRepo) as Record<string, unknown> | undefined;
         if (!task) return;
-        // cancel raced ahead of scheduling: mark terminal now, don't start
-        if (this.cancelledTasks.has(task.id as number)) {
-          this.cancelledTasks.delete(task.id as number);
-          this.db
-            .prepare(
-              `UPDATE task SET status = 'cancelled', error = 'cancelled by user',
-                 finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`
-            )
-            .run(task.id as number);
-          this.emit('completed', { task: this.get(task.id as number) } satisfies TaskCompletedEvent);
-          continue;
-        }
         void this.runTask(rowToTask(task));
       } catch {
         return;
@@ -292,6 +333,8 @@ export class TaskQueue extends EventEmitter {
   }
 
   private async runTask(task: TaskRecord): Promise<void> {
+    const controller = new AbortController();
+    this.runningControllers.set(task.id, controller);
     this.runningRepos.add(task.repoId);
     this.inFlight++;
     this.logs?.info('task', `#${task.id} 开始评审 repo=${task.repoId} node=${task.node} (${task.trigger})`);
@@ -302,47 +345,44 @@ export class TaskQueue extends EventEmitter {
         )
         .run(task.id);
 
-      const onSpawn = (child: { kill: (signal?: string) => void }) => {
+      const onSpawn: TaskSpawnHandler = (child) => {
         this.runningHandles.set(task.id, child);
         // Kill immediately if cancellation raced ahead of the spawn.
-        if (this.cancelledTasks.has(task.id)) child.kill();
+        if (controller.signal.aborted) child.kill();
       };
 
-      let result: { exitCode: number; error?: string };
+      let result: TaskExecutionResult;
       try {
-        result = await this.executor(task, onSpawn);
+        result = await this.executor(task, onSpawn, controller.signal);
       } catch (err) {
         result = { exitCode: -1, error: err instanceof Error ? err.message : String(err) };
       }
 
-      const cancelled = this.cancelledTasks.has(task.id);
-      this.cancelledTasks.delete(task.id);
-      const finalStatus: TaskStatus = cancelled
+      const cancelled = controller.signal.aborted;
+      let error = cancelled ? 'cancelled by user' : result.error ?? null;
+      let finalStatus: TaskStatus = cancelled
         ? 'cancelled'
         : result.exitCode === 0
           ? 'succeeded'
           : 'failed';
-      if (finalStatus === 'succeeded') {
-        this.logs?.info('task', `#${task.id} 评审完成`);
-      } else if (finalStatus === 'failed') {
-        this.logs?.error('task', `#${task.id} 评审失败 (ocr 退出码 ${result.exitCode}): ${result.error ?? '无错误详情'}`);
-      } else {
-        this.logs?.info('task', `#${task.id} 已取消`);
-      }
       try {
-        this.db
-          .prepare(
-            `UPDATE task
-             SET status = ?, error = ?, ocr_exit_code = ?,
-                 finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-             WHERE id = ?`
-          )
-          .run(
-            finalStatus,
-            cancelled ? 'cancelled by user' : result.error ?? null,
-            cancelled ? null : result.exitCode,
-            task.id
-          );
+        if (finalStatus === 'succeeded' && this.reports) {
+          try {
+            if (!result.report) throw new Error('引擎未生成报告');
+            this.db.prepare('UPDATE task SET pending_report = ? WHERE id = ?')
+              .run(JSON.stringify(result.report), task.id);
+            this.commitReport(task.id, result.report);
+          } catch (err) {
+            finalStatus = 'failed';
+            error = this.reportError(err);
+            this.finish(task.id, finalStatus, error, result.exitCode);
+          }
+        } else {
+          this.finish(task.id, finalStatus, error, cancelled ? null : result.exitCode);
+        }
+        if (finalStatus === 'succeeded') this.logs?.info('task', `#${task.id} 评审完成`);
+        else if (finalStatus === 'cancelled') this.logs?.info('task', `#${task.id} 已取消`);
+        else this.logs?.error('task', `#${task.id} 评审失败: ${error ?? '无错误详情'}`);
         const finalTask = this.get(task.id);
         this.emit('completed', { task: finalTask } satisfies TaskCompletedEvent);
       } catch {
@@ -350,10 +390,29 @@ export class TaskQueue extends EventEmitter {
       }
     } finally {
       this.inFlight--;
+      this.runningControllers.delete(task.id);
       this.runningHandles.delete(task.id);
       this.runningRepos.delete(task.repoId);
       this.kick();
       this.wakeIdleWaiters();
     }
+  }
+
+  private finish(taskId: number, status: TaskStatus, error: string | null, exitCode: number | null): void {
+    this.db.prepare(
+      `UPDATE task SET status = ?, error = ?, ocr_exit_code = ?, pending_report = NULL,
+         finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`
+    ).run(status, error, exitCode, taskId);
+  }
+
+  private commitReport(taskId: number, report: CompletedReviewReport): void {
+    this.db.transaction(() => {
+      this.reports!.indexNormalizedReport(taskId, report);
+      this.finish(taskId, 'succeeded', null, 0);
+    })();
+  }
+
+  private reportError(error: unknown): string {
+    return `评审报告保存失败: ${error instanceof Error ? error.message : String(error)}`;
   }
 }

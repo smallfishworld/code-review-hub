@@ -2,9 +2,12 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import {
   parseGitLogOutput,
-  injectCredentialsInUrl,
+  gitRemote,
+  scrubCachedGitCredentials,
   gitLsRemote,
   gitLog,
   gitResolveSha,
@@ -17,29 +20,26 @@ import {
 
 const SEP = '\u001e';
 
-describe('injectCredentialsInUrl', () => {
-  it('injects user:pass into an https url', () => {
-    expect(injectCredentialsInUrl('https://host.example/repo.git', { username: 'u', password: 'p' })).toBe(
-      'https://u:p@host.example/repo.git'
-    );
+describe('gitRemote credentials', () => {
+  it('supplies credentials to Git via a host-scoped helper and keeps them out of the URL', () => {
+    const remote = gitRemote('https://old@host.example/repo.git', { username: 'a b', password: 'c/d:$' });
+    expect(remote.url).toBe('https://host.example/repo.git');
+    expect(remote.env.GIT_CONFIG_PARAMETERS).not.toContain('c/d:$');
+    const fill = (host: string) => execFileSync('git', ['credential', 'fill'], {
+      env: { ...process.env, ...remote.env },
+      input: `protocol=https\nhost=${host}\n\n`,
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    expect(fill('host.example')).toContain('username=a b\npassword=c/d:$');
+    expect(() => fill('other.example')).toThrow();
   });
-  it('url-encodes special characters', () => {
-    expect(
-      injectCredentialsInUrl('https://host.example/r.git', { username: 'a b', password: 'c/d' })
-    ).toBe('https://a%20b:c%2Fd@host.example/r.git');
-  });
-  it('replaces existing userinfo', () => {
-    expect(
-      injectCredentialsInUrl('https://old@host.example/r.git', { username: 'new', password: 'x' })
-    ).toBe('https://new:x@host.example/r.git');
-  });
-  it('leaves ssh urls untouched', () => {
-    expect(injectCredentialsInUrl('git@host.example:repo.git', { username: 'u' })).toBe(
-      'git@host.example:repo.git'
-    );
-  });
-  it('leaves url untouched without credentials', () => {
-    expect(injectCredentialsInUrl('https://host.example/r.git', {})).toBe('https://host.example/r.git');
+
+  it('leaves SSH and local paths unchanged', () => {
+    expect(gitRemote('git@host.example:repo.git', { username: 'u' })).toEqual({
+      url: 'git@host.example:repo.git',
+      env: {},
+    });
   });
 });
 
@@ -175,5 +175,31 @@ describe('git integration (local repo)', () => {
     await gitPrepareCommit(cloneDir, repoDir, head);
     const { stdout: cat } = await runGit(['show', `${head}:b.txt`], { cwd: cloneDir });
     expect(cat).toBe('world\n');
+  });
+});
+
+describe('managed Git cache credentials', () => {
+  it('does not write credentials to origin and scrubs old clone caches', async () => {
+    const cleanUrl = 'https://example.invalid/fixture.git';
+    const legacyUrl = 'https://fixture-user:synthetic-token@example.invalid/fixture.git';
+    const cacheRoot = join(workDir, 'managed');
+    const clone = join(cacheRoot, 'workcopies', '1-v2');
+    mkdirSync(join(cacheRoot, 'workcopies'), { recursive: true });
+    await gitClone(legacyUrl, clone, {}, {
+      env: {
+        GIT_CONFIG_COUNT: '1',
+        GIT_CONFIG_KEY_0: `url.${pathToFileURL(repoDir).href}.insteadOf`,
+        GIT_CONFIG_VALUE_0: cleanUrl,
+      },
+    });
+    const origin = () => runGit(['config', '--local', '--get-all', 'remote.origin.url'], { cwd: clone });
+    expect((await origin()).stdout.trim()).toBe(cleanUrl);
+
+    await runGit(['config', '--local', 'remote.origin.url', legacyUrl], { cwd: clone });
+    await runGit(['config', '--local', '--add', 'remote.origin.url', 'https://mirror.invalid/fixture.git'], { cwd: clone });
+    const errors: string[] = [];
+    await scrubCachedGitCredentials(cacheRoot, (name) => errors.push(name));
+    expect(errors).toEqual([]);
+    expect((await origin()).stdout.trim().split(/\r?\n/)).toEqual([cleanUrl, 'https://mirror.invalid/fixture.git']);
   });
 });

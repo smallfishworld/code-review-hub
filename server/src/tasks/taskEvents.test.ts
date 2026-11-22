@@ -1,10 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDatabase } from '../db/database.js';
 import { TaskQueue, type TaskCompletedEvent, type TaskRecord } from './taskQueue.js';
-import { ReportService } from './reportService.js';
+import { ReportService, type CompletedReviewReport } from './reportService.js';
 import { TaskEventHub } from './taskEvents.js';
 import type Database from 'better-sqlite3';
 
@@ -42,16 +42,27 @@ function executor() {
       return { exitCode: -1, error: 'killed' };
     }
     if (task.node === 'bad') return { exitCode: 1, error: 'ocr boom' };
-    return { exitCode: 0 };
+    if (task.node === 'missing') return { exitCode: 0 };
+    return { exitCode: 0, report: writeReport(task.id) };
   };
 }
 
+function writeReport(taskId: number): CompletedReviewReport {
+  mkdirSync(join(dataDir, 'reports'), { recursive: true });
+  const rawPath = join(dataDir, 'reports', `${taskId}.json`);
+  writeFileSync(rawPath, '{"findings":[{"message":"adapter-specific"}]}');
+  return { rawPath, summary: 'normalized summary', engineName: 'test adapter', issues: [
+    { file: 'source.ts', startLine: 4, endLine: 8, description: 'normalized issue', severity: 'high' },
+  ] };
+}
+
 async function setup() {
-  const queue = new TaskQueue(db, executor(), 2);
+  const reports = new ReportService(db);
+  const queue = new TaskQueue(db, executor(), 2, undefined, reports);
   q = queue;
-  const hub = new TaskEventHub(db, queue, new ReportService(db), dataDir);
+  const hub = new TaskEventHub(db, queue, reports, dataDir);
   hub.start();
-  return { queue, hub };
+  return { queue, hub, reports };
 }
 
 describe('task terminal-state event hook', () => {
@@ -97,20 +108,62 @@ describe('task terminal-state event hook', () => {
     expect(seen).toEqual(['succeeded']);
   });
 
-  it('hub indexes the report of succeeded tasks', async () => {
-    const { queue } = await setup();
+  it('publishes the normalized report before notifying success listeners', async () => {
+    const { queue, hub, reports } = await setup();
     const repoId = seedRepo(db);
+    const published = vi.fn((event: TaskCompletedEvent) => reports.detail(event.task.id));
+    hub.onTerminal(published);
     const t = queue.enqueue(repoId, 'good', 'manual');
-    // pre-create the report file the runner would have written
-    mkdirSync(join(dataDir, 'reports'), { recursive: true });
-    const rawPath = join(dataDir, 'reports', `${t.id}.json`);
-    writeFileSync(rawPath, '{"status":"success","comments":[],"message":"ok"}');
     await queue.idle();
-    const reports = new ReportService(db);
-    const stored = reports.get(t.id);
-    expect(stored).not.toBeNull();
-    expect(stored!.parsedOk).toBe(true);
-    expect(stored!.issueCount).toBe(0);
+    expect(queue.get(t.id).status).toBe('succeeded');
+    expect(published.mock.results[0].value).toMatchObject({
+      report: { parsedOk: true, issueCount: 1, summary: 'normalized summary', engine: 'test adapter' },
+      issues: [{ file: 'source.ts', line: 4, endLine: 8, description: 'normalized issue' }],
+    });
+  });
+
+  it('notifies failure when a successful executor returns no usable report', async () => {
+    const { queue, hub, reports } = await setup();
+    const listener = vi.fn();
+    hub.onTerminal(listener);
+    const task = queue.enqueue(seedRepo(db), 'missing', 'manual');
+    await queue.idle();
+    expect(listener).toHaveBeenCalledWith({ task: expect.objectContaining({
+      id: task.id, status: 'failed', error: expect.stringContaining('未生成报告'),
+    }) });
+    expect(reports.detail(task.id)).toBeNull();
+  });
+
+  it('rolls back report and issue writes if indexing fails before success commits', async () => {
+    const { queue, reports } = await setup();
+    const index = reports.indexNormalizedReport.bind(reports);
+    vi.spyOn(reports, 'indexNormalizedReport').mockImplementation((taskId, report) => {
+      index(taskId, report);
+      throw new Error('simulated index failure');
+    });
+    const task = queue.enqueue(seedRepo(db), 'good', 'manual');
+    await queue.idle();
+    expect(queue.get(task.id)).toMatchObject({ status: 'failed', error: expect.stringContaining('simulated index failure') });
+    expect(reports.detail(task.id)).toBeNull();
+  });
+
+  it('finalizes a staged report once after restarting, without rerunning the engine', async () => {
+    const { queue, hub, reports } = await setup();
+    const repoId = seedRepo(db);
+    const taskId = Number(db.prepare(
+      "INSERT INTO task (repo_id, node, trigger, status) VALUES (?, 'staged', 'manual', 'running')"
+    ).run(repoId).lastInsertRowid);
+    db.prepare('UPDATE task SET pending_report = ? WHERE id = ?').run(JSON.stringify(writeReport(taskId)), taskId);
+    const listener = vi.fn();
+    hub.onTerminal(listener);
+    queue.recoverFromRestart();
+    queue.recoverFromRestart();
+    await queue.idle();
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(queue.get(taskId).status).toBe('succeeded');
+    expect(reports.issues(taskId)).toHaveLength(1);
+    expect(db.prepare('SELECT pending_report FROM task WHERE id = ?').get(taskId))
+      .toEqual({ pending_report: null });
   });
 
   it('hub does not index failed/cancelled tasks (no report file)', async () => {

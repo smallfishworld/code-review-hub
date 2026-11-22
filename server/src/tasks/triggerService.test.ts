@@ -164,6 +164,23 @@ describe('manual trigger API (git)', () => {
     hangQueue.stop();
   });
 
+  it('asks for confirmation before re-reviewing a completed node', async () => {
+    const { origin, shas: [node] } = makeGitOrigin(1);
+    const repoId = addGitRepo(origin);
+    const review = `/api/repos/${repoId}/review`;
+    const first = await post(review, { node });
+    expect(first.statusCode).toBe(201);
+    await queue.idle();
+    const firstId = first.json().task.id;
+    expect(queue.get(firstId).status).toBe('succeeded');
+    expect((await post(review, { node })).statusCode).toBe(409);
+    expect((await post(review, { node, force: 'false' })).statusCode).toBe(409);
+    const confirmed = await post(review, { node, force: true });
+    expect(confirmed.statusCode).toBe(201);
+    expect(confirmed.json().task.id).not.toBe(firstId);
+    await queue.idle();
+  });
+
   it('a cancelled task does not block re-triggering the node', async () => {
     const { origin, shas } = makeGitOrigin(1);
     const repoId = addGitRepo(origin);

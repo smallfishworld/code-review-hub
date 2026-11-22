@@ -1,10 +1,9 @@
 import type Database from 'better-sqlite3';
-import { join } from 'node:path';
-import { existsSync, mkdirSync } from 'node:fs';
 import type { CredentialService } from '../crypto/credentialService.js';
 import type { TaskQueue, TaskRecord } from './taskQueue.js';
 import { svnInfo, svnLog } from '../vcs/svn.js';
-import { gitFetchBranch, gitLog, gitResolveSha } from '../vcs/git.js';
+import { ensureGitClone, gitFetchBranch, gitLog, gitResolveSha } from '../vcs/git.js';
+import { repoSourceVersion } from '../repos/sourceVersion.js';
 import { workCopyDir } from './ocrRunner.js';
 
 /**
@@ -28,6 +27,7 @@ interface RepoRow {
   username: string | null;
   credential_id: number | null;
   branch: string | null;
+  source_version: number;
 }
 
 export interface TriggerSingleResponse {
@@ -80,13 +80,13 @@ export class TriggerService {
       if (!entry || entry.revision !== rev) {
         throw new TriggerError(`revision ${rev} 不存在`, 404);
       }
-      const task = this.enqueue(repo.id, String(rev), 'manual', entry.author, opts.force);
+      const task = this.enqueue(repo, String(rev), entry.author, opts.force);
       return { task, duplicate: task === null };
     }
 
     // git: short or full sha must resolve and be unique
     const sha = await this.resolveGitCommit(repo, auth, node);
-    const task = this.enqueue(repo.id, sha, 'manual', undefined, opts.force);
+    const task = this.enqueue(repo, sha, undefined, opts.force);
     return { task, duplicate: task === null };
   }
 
@@ -98,8 +98,12 @@ export class TriggerService {
     if (!/^[0-9a-f]{4,40}$/i.test(node)) {
       throw new TriggerError(`非法 commit 哈希: ${node}`);
     }
-    const wcDir = workCopyDir(this.dataDir, repo.id);
-    await this.ensureClone(wcDir, repo, auth);
+    const wcDir = workCopyDir(this.dataDir, repo.id, repo.source_version);
+    try {
+      await ensureGitClone(wcDir, repo.url, auth);
+    } catch (err) {
+      throw new TriggerError(`Git 仓库不可达: ${errorMessage(err)}`, 502);
+    }
     await gitFetchBranch(wcDir, repo.url, repo.branch ?? 'main', auth);
     const full = await gitResolveSha(wcDir, node);
     if (full) return full;
@@ -108,22 +112,6 @@ export class TriggerService {
       throw new TriggerError(`commit ${node} 不唯一（存在多个匹配的前缀）`, 400);
     }
     throw new TriggerError(`commit ${node} 不存在`, 404);
-  }
-
-  /** Bootstrap the cached clone on first use (same dir the runner uses). */
-  private async ensureClone(
-    wcDir: string,
-    repo: RepoRow,
-    auth: { username?: string; password?: string }
-  ): Promise<void> {
-    if (existsSync(join(wcDir, '.git'))) return;
-    try {
-      mkdirSync(join(wcDir, '..'), { recursive: true });
-      const { gitClone } = await import('../vcs/git.js');
-      await gitClone(repo.url, wcDir, auth);
-    } catch (err) {
-      throw new TriggerError(`Git 仓库不可达: ${errorMessage(err)}`, 502);
-    }
   }
 
   /** True when more than one object shares this short-sha prefix. */
@@ -199,7 +187,7 @@ export class TriggerService {
     const tasks: TaskRecord[] = [];
     let duplicates = 0;
     for (const e of entries) {
-      const t = this.enqueue(repo.id, String(e.revision), 'manual', e.author, force);
+      const t = this.enqueue(repo, String(e.revision), e.author, force);
       if (t) tasks.push(t);
       else duplicates++;
     }
@@ -220,7 +208,7 @@ export class TriggerService {
     }
 
     // enumerate commits in [from, to] inclusive, oldest first; clone exists.
-    const wcDir = workCopyDir(this.dataDir, repo.id);
+    const wcDir = workCopyDir(this.dataDir, repo.id, repo.source_version);
     let entries;
     try {
       const { runGit } = await import('../vcs/git.js');
@@ -260,7 +248,7 @@ export class TriggerService {
     const tasks: TaskRecord[] = [];
     let duplicates = 0;
     for (const e of entries) {
-      const t = this.enqueue(repo.id, e.sha, 'manual', e.authorName, force);
+      const t = this.enqueue(repo, e.sha, e.authorName, force);
       if (t) tasks.push(t);
       else duplicates++;
     }
@@ -279,31 +267,14 @@ export class TriggerService {
     return entry;
   }
 
-  /**
-   * Enqueue unless already reviewed. A terminal task (succeeded/failed/
-   * cancelled) is history, not a blocker: the node can be re-triggered and
-   * gets a fresh task row. Only an ACTIVE (queued/running) task for the same
-   * node counts as duplicate — queueing it twice would race the same working
-   * copy. force=true bypasses even that (and still dedups via the queue's
-   * active-task check).
-   */
-  private enqueue(
-    repoId: number,
-    node: string,
-    trigger: 'manual' | 'auto',
-    author?: string,
-    force?: boolean
-  ): TaskRecord | null {
-    if (!force) {
-      const prior = this.db
-        .prepare(
-          `SELECT id FROM task
-           WHERE repo_id = ? AND node = ? AND status IN ('queued','running')`
-        )
-        .get(repoId, node);
-      if (prior) return null;
+  private enqueue(repo: RepoRow, node: string, author?: string, force?: boolean): TaskRecord | null {
+    if (repoSourceVersion(this.db, repo.id) !== repo.source_version) {
+      throw new TriggerError('仓库来源已变更，请重新选择评审节点', 409);
     }
-    return this.queue.enqueue(repoId, node, trigger, author);
+    const context = { sourceVersion: repo.source_version };
+    return force === true
+      ? this.queue.enqueue(repo.id, node, 'manual', author, context)
+      : this.queue.enqueueIfNew(repo.id, node, 'manual', author, context);
   }
 
   private getRepo(repoId: number): RepoRow {

@@ -1,4 +1,4 @@
-import type { TaskRecord } from '../tasks/taskQueue.js';
+import type { TaskRecord, TaskSpawnHandler } from '../tasks/taskQueue.js';
 
 /**
  * Pluggable review engine abstraction (openspec: pluggable-engines-mcp-memory).
@@ -57,7 +57,8 @@ export interface PrepareContext {
     branch?: string;
   };
   /** Kill handle wiring for task cancellation. */
-  onSpawn: (child: { kill: (signal?: string) => void }) => void;
+  onSpawn: TaskSpawnHandler;
+  signal?: AbortSignal;
   /** Environment overrides pointing engines at their isolated HOME. */
   env?: Record<string, string>;
 }
@@ -101,16 +102,21 @@ export interface NormalizedIssue {
   suggestion?: string;
 }
 
+export interface NormalizedReport {
+  summary: string;
+  issues: NormalizedIssue[];
+}
+
 export interface ReviewEngine {
   readonly engineId: number;
   readonly name: string;
   readonly capabilities: EngineCapabilities;
   /** Dependency + version check; cheap, safe to call per task. */
-  probe(): Promise<EngineProbe>;
+  probe(signal?: AbortSignal): Promise<EngineProbe>;
   /** Bring the working copy to the task node and collect the change set. */
   prepare(ctx: PrepareContext): Promise<PrepareResult>;
   /** Execute the review; resolves non-throwingly on engine failure. */
   review(req: ReviewRequest, ctx: PrepareContext): Promise<EngineRawResult>;
   /** Map the engine's raw JSON output to the unified issue model. */
-  normalize(raw: string): { issues: NormalizedIssue[] };
+  normalize(raw: string): NormalizedReport;
 }

@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { locateCommand } from './which.js';
+import { bindProcessAbort } from '../vcs/processAbort.js';
 
 export interface DependencyResult {
   /** command name: svn | git | ocr */
@@ -75,9 +76,12 @@ export async function probeDependency(
   command: string,
   conditional: boolean,
   timeoutMs = 10_000,
-  minVersion?: string
+  minVersion?: string,
+  signal?: AbortSignal
 ): Promise<DependencyResult> {
+  signal?.throwIfAborted();
   const located = await locateCommand(command);
+  signal?.throwIfAborted();
   const resolved = located.path;
   if (!resolved) {
     return {
@@ -96,6 +100,7 @@ export async function probeDependency(
       if (!settled) {
         settled = true;
         clearTimeout(timer);
+        unbind();
         resolve(r);
       }
     };
@@ -105,7 +110,9 @@ export async function probeDependency(
     const child = spawn(resolved, ['--version'], {
       windowsHide: true,
       shell: needsShell,
+      detached: Boolean(signal) && !WINDOWS,
     });
+    const unbind = bindProcessAbort(child, signal);
     const timer = setTimeout(() => {
       child.kill();
       done({

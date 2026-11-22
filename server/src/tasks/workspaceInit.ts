@@ -1,19 +1,18 @@
 import type Database from 'better-sqlite3';
 import type { CredentialService } from '../crypto/credentialService.js';
 import { workCopyDir } from './ocrRunner.js';
-import { existsSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { ensureGitClone } from '../vcs/git.js';
+import { ensureSvnWorkspace } from '../vcs/svn.js';
+import { ocrHomeDir } from '../engines/ocrEngine.js';
+import { prepareOcrHomeSvnConfig } from '../providers/ocrProviderConfig.js';
 import type { LogService } from '../logs/logService.js';
 
 /**
  * Workspace prewarm: downloads the repository (SVN checkout / git clone)
  * right after the repo is saved instead of lazily during the first review.
  *
- * The runner (`OcrRunner.prepareSvnWorkCopy` / `prepareGitClone`) still
- * handles its own bootstrap — the real prepare is idempotent, it skips the
- * checkout/clone when the workspace already exists. Prewarm runs the same
- * operations standalone and tracks progress in the repo row's init columns
- * so the console can show "初始化中" and a failure reason with a retry.
+ * Shares the workspace initialization lock with the review and monitor paths.
+ * Tracks progress in the repo row so the console can show status and retry.
  */
 
 export type RepoInitStatus = 'pending' | 'preparing' | 'ready' | 'failed';
@@ -24,14 +23,12 @@ interface InitRow {
   url: string;
   username: string | null;
   credential_id: number | null;
-  branch: string | null;
-  init_status: RepoInitStatus;
+  source_version: number;
 }
 
-/** In-process serialization: one init per repo, never two in parallel. */
-const inFlight = new Set<number>();
-
 export class WorkspaceInitService {
+  private readonly inFlight = new Set<string>();
+
   constructor(
     private readonly db: Database.Database,
     private readonly credentials: CredentialService,
@@ -56,90 +53,50 @@ export class WorkspaceInitService {
    * thrown — callers fire-and-forget.
    */
   start(repoId: number): boolean {
-    if (inFlight.has(repoId)) return false;
-    const row = this.db
-      .prepare(
-        'SELECT id, type, url, username, credential_id, branch, init_status FROM repo WHERE id = ?'
-      )
-      .get(repoId) as InitRow | undefined;
+    const row = this.db.prepare(
+      'SELECT id, type, url, username, credential_id, source_version FROM repo WHERE id = ?'
+    ).get(repoId) as InitRow | undefined;
     if (!row) return false;
-    // Workspace already downloaded (a previous review or init did it):
-    // nothing to do but confirm ready.
-    if (existsSync(join(workCopyDir(this.dataDir, repoId), row.type === 'svn' ? '.svn' : '.git'))) {
-      this.mark(repoId, 'ready', null);
-      return true;
-    }
+    const wcDir = workCopyDir(this.dataDir, repoId, row.source_version);
+    if (this.inFlight.has(wcDir)) return false;
 
-    inFlight.add(repoId);
-    this.mark(repoId, 'preparing', null);
-    void this.run(repoId, row).finally(() => inFlight.delete(repoId));
+    this.inFlight.add(wcDir);
+    this.mark(row, 'preparing', null);
+    void this.run(row, wcDir)
+      .catch((err) => this.logs?.error('task', `仓库 #${repoId} 工作副本状态写入失败: ${String(err)}`))
+      .finally(() => this.inFlight.delete(wcDir));
     return true;
   }
 
-  private async run(repoId: number, row: InitRow): Promise<void> {
-    const auth = {
-      url: row.url,
-      username: row.username ?? undefined,
-      password: row.credential_id
-        ? (this.credentials.reveal(row.credential_id) ?? undefined)
-        : undefined,
-      branch: row.branch ?? undefined,
-    };
-    const wcDir = workCopyDir(this.dataDir, repoId);
+  private async run(row: InitRow, wcDir: string): Promise<void> {
     try {
+      const auth = {
+        username: row.username ?? undefined,
+        password: row.credential_id ? this.credentials.reveal(row.credential_id) ?? undefined : undefined,
+      };
       if (row.type === 'svn') {
-        const { runSvn, svnInfo } = await import('../vcs/svn.js');
-        const svnAuth = { username: auth.username, password: auth.password };
-        mkdirSync(wcDir, { recursive: true });
-        // Full checkout (see OcrRunner.prepareSvnWorkCopy for rationale).
-        // CRITICAL: cacheAuth=true on the server-touching call — svn only
-        // writes credentials into its auth store during an AUTHENTICATED
-        // server exchange, and `svn info <wc>` is purely local (it never
-        // contacts the server, so it can never seed). On Windows svn builds
-        // its config/auth dir from $HOME ($HOME\AppData\Roaming\Subversion)
-        // and ocr's own svn calls run under that redirected HOME — seeding
-        // anywhere else leaves the redirected store empty and the review
-        // hangs on an invisible auth prompt forever.
-        const { prepareOcrHomeSvnConfig } = await import('../providers/ocrProviderConfig.js');
-        const { ocrHomeDir } = await import('../engines/ocrEngine.js');
-        // Per-repo isolated HOME — same layout the engine uses at review
-        // time, so the seeded credential store is the one ocr reads later.
-        const ocrHome = ocrHomeDir(this.dataDir, repoId);
-        // servers file: cert-trust so an intranet https checkout cannot
-        // prompt either.
-        prepareOcrHomeSvnConfig(ocrHome);
-        const homeEnv = { HOME: ocrHome, USERPROFILE: ocrHome };
-        await runSvn(['checkout', auth.url, wcDir], svnAuth, {
-          timeoutMs: 30 * 60_000,
-          cacheAuth: true,
-          env: homeEnv,
-        });
-        await svnInfo(wcDir, svnAuth);
+        // Seed credentials under the same HOME that ocr will use.
+        const home = ocrHomeDir(this.dataDir, row.id, row.source_version);
+        prepareOcrHomeSvnConfig(home);
+        await ensureSvnWorkspace(wcDir, row.url, auth, { env: { HOME: home, USERPROFILE: home } });
       } else {
-        const { gitClone } = await import('../vcs/git.js');
-        mkdirSync(join(wcDir, '..'), { recursive: true });
-        await gitClone(auth.url, wcDir, {
-          username: auth.username,
-          password: auth.password,
-        });
+        await ensureGitClone(wcDir, row.url, auth);
       }
-      this.mark(repoId, 'ready', null);
-      this.logs?.info('task', `仓库 #${repoId} 工作副本初始化完成`);
+      if (this.mark(row, 'ready', null)) this.logs?.info('task', `仓库 #${row.id} 工作副本初始化完成`);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
-      this.mark(repoId, 'failed', reason);
-      this.logs?.error('task', `仓库 #${repoId} 工作副本初始化失败: ${reason}`);
+      if (this.mark(row, 'failed', reason)) this.logs?.error('task', `仓库 #${row.id} 工作副本初始化失败: ${reason}`);
     }
   }
 
-  private mark(repoId: number, status: RepoInitStatus, error: string | null): void {
-    this.db
+  private mark(row: InitRow, status: RepoInitStatus, error: string | null): boolean {
+    return this.db
       .prepare(
         `UPDATE repo
          SET init_status = ?, init_error = ?,
              init_updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-         WHERE id = ?`
+         WHERE id = ? AND source_version = ?`
       )
-      .run(status, error, repoId);
+      .run(status, error, row.id, row.source_version).changes > 0;
   }
 }

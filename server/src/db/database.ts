@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 export type RepoType = 'svn' | 'git';
 
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 /**
  * Ordered, append-only list of migrations. Each entry runs once, tracked in
@@ -308,6 +308,24 @@ const MIGRATIONS: { version: number; name: string; up: (db: Database.Database) =
       addMcpTables(db);
       addMemoryTables(db);
       addIssueColumns(db);
+    },
+  },
+  {
+    version: 10,
+    name: 'review-task-provenance',
+    up: (db) => {
+      db.exec(`
+        ALTER TABLE repo ADD COLUMN source_version INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE task ADD COLUMN source_version INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE task ADD COLUMN monitor_rule_id INTEGER;
+        ALTER TABLE task ADD COLUMN engine_selection_error TEXT;
+        ALTER TABLE task ADD COLUMN pending_report TEXT;
+        DROP INDEX idx_task_active;
+        DROP INDEX idx_task_repo_node;
+        CREATE INDEX idx_task_repo_node ON task(repo_id, source_version, node);
+        CREATE UNIQUE INDEX idx_task_active ON task(repo_id, source_version, node, trigger)
+          WHERE status IN ('queued','running');
+      `);
     },
   },
 ];

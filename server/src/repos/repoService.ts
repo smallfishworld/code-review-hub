@@ -1,11 +1,12 @@
 import type Database from 'better-sqlite3';
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { CredentialService } from '../crypto/credentialService.js';
+import { workspaceKey } from './sourceVersion.js';
 import { svnInfo, svnLogPage, SvnError } from '../vcs/svn.js';
 import {
-  gitClone,
+  ensureGitClone,
   gitFetchBranch,
   gitLogPage,
   gitLsRemote,
@@ -42,6 +43,7 @@ export interface RepoInput {
   password?: string; // write-only; never returned
   branch?: string; // git only
   enabled?: boolean;
+  engineId?: number | null;
 }
 
 export type RepoInitStatus = 'pending' | 'preparing' | 'ready' | 'failed';
@@ -54,6 +56,7 @@ export interface RepoRecord {
   username?: string;
   branch?: string;
   enabled: boolean;
+  engineId: number | null;
   hasCredential: boolean;
   /** Workspace prewarm state: pending/preparing = download in flight. */
   initStatus: RepoInitStatus;
@@ -119,8 +122,8 @@ export class RepoService {
 
     const info = this.db
       .prepare(
-        `INSERT INTO repo (type, name, url, username, credential_id, branch, enabled, init_status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')`
+        `INSERT INTO repo (type, name, url, username, credential_id, branch, enabled, engine_id, init_status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')`
       )
       .run(
         input.type,
@@ -129,7 +132,8 @@ export class RepoService {
         input.username ?? null,
         credentialId,
         input.type === 'git' ? input.branch ?? 'main' : null,
-        input.enabled === false ? 0 : 1
+        input.enabled === false ? 0 : 1,
+        input.engineId ?? null
       );
     return this.get(Number(info.lastInsertRowid));
   }
@@ -154,32 +158,40 @@ export class RepoService {
       password: effectivePassword,
     });
 
-    let credentialId = (existing.credential_id as number | null) ?? null;
-    if (input.password) {
-      if (credentialId) {
-        this.credentials.update(credentialId, input.password);
-      } else {
-        credentialId = this.credentials.store(`repo:${input.name}`, input.type, input.password);
+    this.db.transaction(() => {
+      const current = this.db.prepare('SELECT * FROM repo WHERE id = ?').get(id) as
+        | Record<string, unknown>
+        | undefined;
+      if (!current) throw new RepoServiceError('仓库不存在', 404);
+      const branch = input.type === 'git' ? input.branch ?? 'main' : null;
+      const changed = current.type !== input.type || current.url !== input.url || current.branch !== branch;
+      const sourceVersion = (current.source_version as number) + Number(changed);
+      let credentialId = current.credential_id as number | null;
+      if (input.password) {
+        if (credentialId) this.credentials.update(credentialId, input.password);
+        else credentialId = this.credentials.store(`repo:${input.name}`, input.type, input.password);
       }
-    }
 
-    this.db
-      .prepare(
+      this.db.prepare(
         `UPDATE repo
          SET type = ?, name = ?, url = ?, username = ?, credential_id = ?,
-             branch = ?, enabled = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+             branch = ?, enabled = ?, engine_id = ?, source_version = ?,
+             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
          WHERE id = ?`
-      )
-      .run(
-        input.type,
-        input.name,
-        input.url,
-        input.username ?? null,
-        credentialId,
-        input.type === 'git' ? input.branch ?? 'main' : null,
-        input.enabled === false ? 0 : 1,
-        id
+      ).run(
+        input.type, input.name, input.url, input.username ?? null, credentialId,
+        branch, input.enabled === false ? 0 : 1,
+        input.engineId === undefined ? current.engine_id : input.engineId, sourceVersion, id
       );
+      if (changed) {
+        this.db.prepare(
+          "UPDATE repo SET init_status = 'pending', init_error = NULL, init_updated_at = NULL WHERE id = ?"
+        ).run(id);
+        this.db.prepare(
+          'DELETE FROM monitor_state WHERE rule_id IN (SELECT id FROM monitor_rule WHERE repo_id = ?)'
+        ).run(id);
+      }
+    })();
     return this.get(id);
   }
 
@@ -201,8 +213,8 @@ export class RepoService {
   }
 
   delete(id: number): void {
-    const existing = this.db.prepare('SELECT id, credential_id FROM repo WHERE id = ?').get(id) as
-      | { id: number; credential_id: number | null }
+    const existing = this.db.prepare('SELECT id, credential_id, source_version FROM repo WHERE id = ?').get(id) as
+      | { id: number; credential_id: number | null; source_version: number }
       | undefined;
     if (!existing) throw new RepoServiceError('仓库不存在', 404);
     // monitor_rule/state cascade via FK; task/report history is kept
@@ -216,7 +228,7 @@ export class RepoService {
     // still succeed, and an orphaned cache is harmless (the next clone
     // recreates the directory from scratch).
     try {
-      rmSync(this.nodesCacheDir(id), { recursive: true, force: true });
+      rmSync(this.nodesCacheDir(id, existing.source_version), { recursive: true, force: true });
     } catch {
       // ignore: cache removal is best-effort
     }
@@ -239,7 +251,14 @@ export class RepoService {
   }
 
   /** Internal: repo url + decrypted password, for VCS operations. */
-  auth(id: number): { type: RepoType; url: string; username?: string; password?: string; branch?: string } {
+  auth(id: number): {
+    type: RepoType;
+    url: string;
+    username?: string;
+    password?: string;
+    branch?: string;
+    sourceVersion: number;
+  } {
     const row = this.db
       .prepare('SELECT * FROM repo WHERE id = ?')
       .get(id) as Record<string, unknown> | undefined;
@@ -252,6 +271,7 @@ export class RepoService {
         ? (this.credentials.reveal(row.credential_id as number) ?? undefined)
         : undefined,
       branch: (row.branch as string | null) ?? undefined,
+      sourceVersion: row.source_version as number,
     };
   }
 
@@ -326,13 +346,9 @@ export class RepoService {
     // cloning per request would be unusable on a large repo).
     const branch = repo.branch ?? 'main';
     const auth = { username: repo.username, password: repo.password };
-    const dir = this.nodesCacheDir(id);
+    const dir = this.nodesCacheDir(id, repo.sourceVersion);
     try {
-      if (!existsSync(join(dir, '.git'))) {
-        mkdirSync(dirname(dir), { recursive: true });
-        rmSync(dir, { recursive: true, force: true });
-        await gitClone(repo.url, dir, auth);
-      }
+      await ensureGitClone(dir, repo.url, auth);
       await gitFetchBranch(dir, repo.url, branch, auth);
       const head = await gitResolveSha(dir, `origin/${branch}`);
       if (!head) throw new RepoServiceError(`无法解析 origin/${branch}`, 422);
@@ -365,10 +381,11 @@ export class RepoService {
    * Where the picker's git clone lives. Kept apart from the runner's working
    * copy so a background review checking out a commit cannot disturb it.
    */
-  private nodesCacheDir(repoId: number): string {
+  private nodesCacheDir(repoId: number, sourceVersion: number): string {
+    const key = workspaceKey(repoId, sourceVersion);
     return this.dataDir
-      ? join(this.dataDir, 'node-cache', String(repoId))
-      : join(tmpdir(), `crp-nodes-${repoId}`);
+      ? join(this.dataDir, 'node-cache', key)
+      : join(tmpdir(), `crp-nodes-${key}`);
   }
 
   private toRecord(row: Record<string, unknown>): RepoRecord {
@@ -380,6 +397,7 @@ export class RepoService {
       username: (row.username as string | null) ?? undefined,
       branch: (row.branch as string | null) ?? undefined,
       enabled: Boolean(row.enabled),
+      engineId: (row.engine_id as number | null) ?? null,
       hasCredential: Boolean(row.credential_id),
       initStatus: (row.init_status as RepoInitStatus) ?? 'ready',
       initError: (row.init_error as string | null) ?? undefined,
@@ -399,6 +417,10 @@ export class RepoService {
     }
     if (input.type === 'git' && input.branch && !/^[\w./-]+$/.test(input.branch)) {
       throw new RepoServiceError('Git 分支名含非法字符');
+    }
+    if (input.engineId != null && (!Number.isInteger(input.engineId) ||
+      !this.db.prepare('SELECT 1 FROM engine WHERE id = ?').get(input.engineId))) {
+      throw new RepoServiceError('评审引擎不存在');
     }
   }
 }

@@ -1,10 +1,10 @@
 import type Database from 'better-sqlite3';
-import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CredentialService } from '../crypto/credentialService.js';
 import type { TaskQueue } from '../tasks/taskQueue.js';
 import { svnInfo, svnLog, type SvnLogEntry } from '../vcs/svn.js';
-import { gitClone, gitFetchBranch, gitLog, gitResolveSha, type GitLogEntry } from '../vcs/git.js';
+import { ensureGitClone, gitFetchBranch, gitLog, gitResolveSha, type GitLogEntry } from '../vcs/git.js';
+import { repoSourceVersion, workspaceKey } from '../repos/sourceVersion.js';
 import { evaluateFilters } from './filters.js';
 import type { LogService } from '../logs/logService.js';
 
@@ -76,6 +76,7 @@ interface RepoRow {
   credential_id: number | null;
   branch: string | null;
   enabled: number;
+  source_version: number;
 }
 
 export interface MonitorOptions {
@@ -177,8 +178,8 @@ export class MonitorService {
   async enableRule(ruleId: number): Promise<void> {
     const rule = this.getRule(ruleId);
     const state = this.getState(ruleId);
-    if (!state?.last_node) {
-      await this.initializePosition(rule);
+    if (state?.last_node == null) {
+      await this.initializePosition(rule, this.getRepo(rule.repo_id));
     }
     this.db.prepare('UPDATE monitor_rule SET enabled = 1 WHERE id = ?').run(ruleId);
     this.schedule({ ...rule, enabled: 1 });
@@ -193,6 +194,7 @@ export class MonitorService {
   async pollRule(ruleId: number): Promise<void> {
     if (this.polling.has(ruleId)) return; // previous tick still running
     this.polling.add(ruleId);
+    let repo: RepoRow | undefined;
     try {
       // The rule (or its repo) may have been deleted since the timer was
       // armed. Stop the timer and return instead of throwing — an uncaught
@@ -205,7 +207,7 @@ export class MonitorService {
         return;
       }
       if (!rule.enabled) return;
-      const repo = this.db
+      repo = this.db
         .prepare('SELECT * FROM repo WHERE id = ?')
         .get(rule.repo_id) as RepoRow | undefined;
       if (!repo) {
@@ -214,15 +216,15 @@ export class MonitorService {
       }
       if (repo.enabled === 0) return; // repo disabled in the console
       const state = this.getState(ruleId);
-      if (!state?.last_node) {
+      if (state?.last_node == null) {
         // not initialized yet (e.g. enabled before start()); initialize now
-        await this.initializePosition(rule);
+        await this.initializePosition(rule, repo);
         return;
       }
       if (repo.type === 'svn') await this.pollSvn(rule, repo, state);
       else await this.pollGit(rule, repo, state);
     } catch (err) {
-      this.recordPollError(ruleId, err);
+      if (repo && this.isCurrent(ruleId, repo)) this.recordPollError(ruleId, err);
     } finally {
       this.polling.delete(ruleId);
     }
@@ -257,12 +259,12 @@ export class MonitorService {
 
   // ---------------------------------------------------------------- internals
 
-  private async initializePosition(rule: MonitorRuleRow): Promise<void> {
-    const repo = this.getRepo(rule.repo_id);
+  private async initializePosition(rule: MonitorRuleRow, repo: RepoRow): Promise<void> {
     const auth = this.repoAuth(repo);
     try {
       if (repo.type === 'svn') {
         const info = await svnInfo(repo.url, auth);
+        if (!this.isCurrent(rule.id, repo, false)) return;
         // No backtrack: start at HEAD (nothing historical is reviewed).
         // Backtrack N: position = HEAD-N so the first poll reviews the last N
         // revisions (from = position+1 = HEAD-N+1).
@@ -271,28 +273,26 @@ export class MonitorService {
         this.setPosition(rule.id, String(position), 'ready');
         this.setHeadNode(rule.id, String(info.revision));
       } else {
-        const wcDir = this.cloneDir(repo.id);
-        if (!existsSync(join(wcDir, '.git'))) {
-          mkdirSync(join(wcDir, '..'), { recursive: true });
-          this.setStateInit(rule.id, 'cloning');
-          await gitClone(repo.url, wcDir, auth);
-        }
+        const wcDir = this.cloneDir(repo);
+        this.setStateInit(rule.id, 'cloning');
+        await ensureGitClone(wcDir, repo.url, auth);
         await gitFetchBranch(wcDir, repo.url, repo.branch ?? 'main', auth);
         const head = await gitResolveSha(wcDir, `origin/${repo.branch ?? 'main'}`);
         if (!head) throw new Error('无法解析远端分支最新提交');
-        this.setHeadNode(rule.id, head);
-        if (rule.backtrack_nodes > 0) {
+        const start = rule.backtrack_nodes > 0
           // position = the commit just before the last N (exclusive range
           // start for `git log position..head`); '' = review from the root.
-          const start = await gitResolveSha(wcDir, `${head}~${rule.backtrack_nodes}`);
-          this.setPosition(rule.id, start ?? '', 'ready');
-        } else {
-          this.setPosition(rule.id, head, 'ready');
-        }
+          ? await gitResolveSha(wcDir, `${head}~${rule.backtrack_nodes}`)
+          : head;
+        if (!this.isCurrent(rule.id, repo, false)) return;
+        this.setHeadNode(rule.id, head);
+        this.setPosition(rule.id, start ?? '', 'ready');
       }
     } catch (err) {
-      this.setStateInit(rule.id, 'failed');
-      this.recordPollError(rule.id, err);
+      if (this.isCurrent(rule.id, repo, false)) {
+        this.setStateInit(rule.id, 'failed');
+        this.recordPollError(rule.id, err);
+      }
       throw err;
     }
   }
@@ -306,14 +306,16 @@ export class MonitorService {
     const last = Number(state.last_node);
     const from = Number.isFinite(last) ? last + 1 : 1;
     const info = await svnInfo(repo.url, auth);
+    if (!this.isCurrent(rule.id, repo)) return;
     this.setHeadNode(rule.id, String(info.revision));
     if (info.revision < from) {
       this.recordPollSuccess(rule.id, state.last_node);
       return; // nothing new
     }
     const entries = await svnLog(repo.url, from, 'HEAD', auth);
+    if (!this.isCurrent(rule.id, repo)) return;
     for (const entry of entries) {
-      this.processSvnNode(rule, entry);
+      this.processSvnNode(rule, entry, repo.source_version);
       this.setPosition(rule.id, String(entry.revision));
     }
     this.recordPollSuccess(rule.id, entries.at(-1)?.revision.toString() ?? state.last_node);
@@ -324,12 +326,14 @@ export class MonitorService {
     repo: RepoRow,
     state: MonitorStateRow
   ): Promise<void> {
-    const wcDir = this.cloneDir(repo.id);
+    const wcDir = this.cloneDir(repo);
     const auth = this.repoAuth(repo);
     const branch = repo.branch ?? 'main';
+    await ensureGitClone(wcDir, repo.url, auth);
     await gitFetchBranch(wcDir, repo.url, branch, auth);
     const head = await gitResolveSha(wcDir, `origin/${branch}`);
     if (!head) throw new Error(`无法解析 origin/${branch}`);
+    if (!this.isCurrent(rule.id, repo)) return;
     this.setHeadNode(rule.id, head);
     const last = state.last_node ?? '';
     if (last === head) {
@@ -338,15 +342,16 @@ export class MonitorService {
     }
     // `last` may be empty (backtracked to the very first commit) — then the
     // range is "everything reachable from head".
-    const entries = last ? await gitLog(wcDir, last, head) : await gitLogAll(wcDir, head);
+    const entries = await gitLog(wcDir, last, head);
+    if (!this.isCurrent(rule.id, repo)) return;
     for (const entry of entries) {
-      this.processGitNode(rule, entry);
+      this.processGitNode(rule, entry, repo.source_version);
       this.setPosition(rule.id, entry.sha);
     }
     this.recordPollSuccess(rule.id, entries.at(-1)?.sha ?? head);
   }
 
-  private processSvnNode(rule: MonitorRuleRow, entry: SvnLogEntry): void {
+  private processSvnNode(rule: MonitorRuleRow, entry: SvnLogEntry, sourceVersion: number): void {
     const outcome = evaluateFilters(this.parseRuleFilters(rule), {
       author: entry.author,
       paths: entry.paths.map((p) => p.path),
@@ -355,7 +360,9 @@ export class MonitorService {
       this.logNode(rule.id, String(entry.revision), 'skipped', outcome.reason, entry.author);
       return;
     }
-    const task = this.queue.enqueueIfNew(rule.repo_id, String(entry.revision), 'auto', entry.author);
+    const task = this.queue.enqueueIfNew(rule.repo_id, String(entry.revision), 'auto', entry.author, {
+      sourceVersion, monitorRuleId: rule.id,
+    });
     if (task) {
       this.logNode(rule.id, String(entry.revision), 'triggered', '命中监控规则', entry.author);
       this.opts.logs?.info(
@@ -373,7 +380,7 @@ export class MonitorService {
     }
   }
 
-  private processGitNode(rule: MonitorRuleRow, entry: GitLogEntry): void {
+  private processGitNode(rule: MonitorRuleRow, entry: GitLogEntry, sourceVersion: number): void {
     const outcome = evaluateFilters(this.parseRuleFilters(rule), {
       author: entry.authorName,
       paths: entry.files,
@@ -382,7 +389,9 @@ export class MonitorService {
       this.logNode(rule.id, entry.sha, 'skipped', outcome.reason, entry.authorName);
       return;
     }
-    const task = this.queue.enqueueIfNew(rule.repo_id, entry.sha, 'auto', entry.authorName);
+    const task = this.queue.enqueueIfNew(rule.repo_id, entry.sha, 'auto', entry.authorName, {
+      sourceVersion, monitorRuleId: rule.id,
+    });
     if (task) {
       this.logNode(rule.id, entry.sha, 'triggered', '命中监控规则', entry.authorName);
       this.opts.logs?.info(
@@ -516,8 +525,16 @@ export class MonitorService {
     };
   }
 
-  private cloneDir(repoId: number): string {
-    return join(this.opts.dataDir, 'workcopies', String(repoId));
+  private isCurrent(ruleId: number, repo: RepoRow, requireEnabled = true): boolean {
+    if (this.stopped || repoSourceVersion(this.db, repo.id) !== repo.source_version) return false;
+    const rule = this.db.prepare(
+      'SELECT r.enabled AS rule_enabled, p.enabled AS repo_enabled FROM monitor_rule r JOIN repo p ON p.id = r.repo_id WHERE r.id = ?'
+    ).get(ruleId) as { rule_enabled: number; repo_enabled: number } | undefined;
+    return Boolean(rule && (!requireEnabled || (rule.rule_enabled && rule.repo_enabled)));
+  }
+
+  private cloneDir(repo: RepoRow): string {
+    return join(this.opts.dataDir, 'workcopies', workspaceKey(repo.id, repo.source_version));
   }
 }
 
@@ -528,14 +545,4 @@ function safeJsonArray(raw: string): string[] {
   } catch {
     return [];
   }
-}
-
-/** Full history reachable from `head`, oldest first (backtrack-to-root case). */
-async function gitLogAll(wcDir: string, head: string): Promise<GitLogEntry[]> {
-  const { runGit, parseGitLogOutput } = await import('../vcs/git.js');
-  const { stdout } = await runGit(
-    ['log', '--reverse', '--format=%x1e%H%n%an%n%ae%n%aI%n%s', '--name-only', '-z', head],
-    { cwd: wcDir, timeoutMs: 60_000 }
-  );
-  return parseGitLogOutput(stdout);
 }

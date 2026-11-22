@@ -2,13 +2,15 @@ import { spawn } from 'node:child_process';
 import type { TaskRecord } from './taskQueue.js';
 import type Database from 'better-sqlite3';
 import type { CredentialService } from '../crypto/credentialService.js';
-import { svnUpdate, svnInfo } from '../vcs/svn.js';
-import { gitClone, gitFetchBranch, gitPrepareCommit, injectCredentialsInUrl } from '../vcs/git.js';
-import { mkdirSync, existsSync } from 'node:fs';
+import { ensureSvnWorkspace, svnUpdate } from '../vcs/svn.js';
+import { ensureGitClone, gitFetchBranch, gitPrepareCommit, gitRemote, gitResolveSha } from '../vcs/git.js';
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { prepareOcrHome, resolveProvider } from '../providers/ocrProviderConfig.js';
 import { which } from '../deps/which.js';
 import type { LogService } from '../logs/logService.js';
+import { workspaceKey } from '../repos/sourceVersion.js';
+import { bindProcessAbort } from '../vcs/processAbort.js';
 
 /**
  * Executes review tasks by invoking the `ocr` CLI.
@@ -79,12 +81,16 @@ function assertSafeRepoAuth(auth: RepoAuthInfo): RepoAuthInfo {
 function loadRepoAuth(
   db: Database.Database,
   credentials: CredentialService,
-  repoId: number
+  repoId: number,
+  sourceVersion?: number
 ): RepoAuthInfo {
   const row = db
     .prepare('SELECT * FROM repo WHERE id = ?')
     .get(repoId) as Record<string, unknown> | undefined;
   if (!row) throw new Error(`repo ${repoId} not found`);
+  if (sourceVersion !== undefined && row.source_version !== sourceVersion) {
+    throw new Error('仓库来源已变更，请重新触发评审');
+  }
   return assertSafeRepoAuth({
     type: row.type as 'svn' | 'git',
     url: row.url as string,
@@ -97,8 +103,8 @@ function loadRepoAuth(
 }
 
 /** Directory holding the cached working copy / clone for a repo. */
-export function workCopyDir(dataDir: string, repoId: number): string {
-  return join(dataDir, 'workcopies', String(repoId));
+export function workCopyDir(dataDir: string, repoId: number, sourceVersion = 0): string {
+  return join(dataDir, 'workcopies', workspaceKey(repoId, sourceVersion));
 }
 
 export class OcrRunner {
@@ -113,7 +119,7 @@ export class OcrRunner {
     task: TaskRecord,
     onSpawn: (child: { kill: (signal?: string) => void }) => void
   ): Promise<{ exitCode: number; error?: string }> => {
-    const auth = loadRepoAuth(this.db, this.credentials, task.repoId);
+    const auth = loadRepoAuth(this.db, this.credentials, task.repoId, task.sourceVersion);
     const reportPath = join(this.opts.dataDir, 'reports', `${task.id}.json`);
     const result = await this.run(task, auth, reportPath, onSpawn);
     return { exitCode: result.exitCode, error: result.error };
@@ -154,7 +160,7 @@ export class OcrRunner {
     }
     this.opts.logs?.info('task', `#${task.id} 工作副本就绪，启动 ocr 评审…`);
 
-    const wcDir = workCopyDir(this.opts.dataDir, task.repoId);
+    const wcDir = workCopyDir(this.opts.dataDir, task.repoId, task.sourceVersion);
     const args = [
       'review',
       '--repo',
@@ -168,7 +174,8 @@ export class OcrRunner {
     ];
     // Feed the configured LLM provider to ocr through an isolated HOME so the
     // platform's provider settings win over any global ocr config.
-    return this.runOcr(args, task.id, onSpawn, ocrHome?.env);
+    const env = auth.type === 'git' ? gitRemote(auth.url, auth, ocrHome?.env).env : ocrHome?.env;
+    return this.runOcr(args, task.id, onSpawn, env);
   }
 
   /** Bootstrap + update the SVN working copy to the task revision. */
@@ -176,73 +183,28 @@ export class OcrRunner {
     task: TaskRecord,
     auth: RepoAuthInfo,
     onSpawn: (child: { kill: (signal?: string) => void }) => void,
-    envOverrides?: Record<string, string>
+    env?: Record<string, string>
   ): Promise<void> {
-    const wcDir = workCopyDir(this.opts.dataDir, task.repoId);
-    const svnAuth = { username: auth.username, password: auth.password };
-    if (!existsSync(join(wcDir, '.svn'))) {
-      mkdirSync(wcDir, { recursive: true });
-      // Full checkout: ocr reviews complete files ("Full-File Scan" — it
-      // reads surrounding code via `svn cat`, not just the diff), so the
-      // working copy must contain the whole tree. A sparse `--depth empty`
-      // checkout forced one server round-trip per file read.
-      //
-      // cacheAuth=true: this is the only server-touching call under the ocr
-      // HOME, and svn writes credentials to its store ONLY during an
-      // authenticated server exchange (an `svn info <wc>` seed is local and
-      // never stores). ocr's own svn calls run with NO auth flags under the
-      // same redirected HOME — without a seeded store they hang forever on
-      // an invisible auth prompt. envOverrides carries the ocr HOME (built
-      // in run() before prep). Other platform svn calls stay --no-auth-cache.
-      const { runSvn } = await import('../vcs/svn.js');
-      await runSvn(
-        ['checkout', auth.url, wcDir],
-        svnAuth,
-        {
-          onSpawn: (c) => onSpawn({ kill: () => c.kill() }),
-          timeoutMs: 30 * 60_000,
-          cacheAuth: true,
-          env: envOverrides,
-        }
-      );
-      // verify reachable + get HEAD for sanity
-      await svnInfo(wcDir, svnAuth);
-    }
-    // move the working copy to the task revision
-    await svnUpdate(wcDir, Number(task.node), svnAuth, {
-      onSpawn: (c) => onSpawn({ kill: () => c.kill() }),
-    });
+    const wcDir = workCopyDir(this.opts.dataDir, task.repoId, task.sourceVersion);
+    const opts = { onSpawn: (child: ReturnType<typeof spawn>) => onSpawn({ kill: () => child.kill() }), env };
+    await ensureSvnWorkspace(wcDir, auth.url, auth, opts);
+    await svnUpdate(wcDir, Number(task.node), auth, opts);
   }
 
   /** Bootstrap + fetch + checkout the git clone at the task commit. */
   private async prepareGitClone(
     task: TaskRecord,
     auth: RepoAuthInfo,
-    _onSpawn: (child: { kill: (signal?: string) => void }) => void
+    onSpawn: (child: { kill: (signal?: string) => void }) => void
   ): Promise<void> {
-    const wcDir = workCopyDir(this.opts.dataDir, task.repoId);
-    if (!existsSync(join(wcDir, '.git'))) {
-      mkdirSync(join(wcDir, '..'), { recursive: true });
-      await gitClone(auth.url, wcDir, {
-        username: auth.username,
-        password: auth.password,
-      });
-    }
-    // fetch branch and check out the commit (sha passed in task.node)
-    await gitFetchBranch(wcDir, auth.url, auth.branch ?? 'main', {
-      username: auth.username,
-      password: auth.password,
-    });
-    // node may be a short sha; resolve via the local repo
-    const { gitResolveSha } = await import('../vcs/git.js');
-    const full = (await gitResolveSha(wcDir, task.node)) ?? task.node;
-    await gitPrepareCommit(wcDir, auth.url, full, {
-      username: auth.username,
-      password: auth.password,
-    });
+    const wcDir = workCopyDir(this.opts.dataDir, task.repoId, task.sourceVersion);
+    const opts = { onSpawn: (child: ReturnType<typeof spawn>) => onSpawn({ kill: () => child.kill() }) };
+    await ensureGitClone(wcDir, auth.url, auth, opts);
+    await gitFetchBranch(wcDir, auth.url, auth.branch ?? 'main', auth, opts);
+    const full = (await gitResolveSha(wcDir, task.node, opts)) ?? task.node;
+    await gitPrepareCommit(wcDir, auth.url, full, auth, opts);
   }
 
-  /** Stream one ocr output chunk into the runtime log, line by line. */
   private logOcrOutput(taskId: number, chunk: string, level: 'info' | 'error'): void {
     const logs = this.opts.logs;
     if (!logs) return;
@@ -261,12 +223,14 @@ export class OcrRunner {
     args: string[],
     taskId: number,
     onSpawn: (child: { kill: (signal?: string) => void }) => void,
-    envOverrides?: Record<string, string>
+    envOverrides?: Record<string, string>,
+    signal?: AbortSignal
   ): Promise<OcrRunResult> {
     // Resolve through PATH ourselves: on Windows a bare `ocr` would hit the
     // extensionless npm shim, which CreateProcess cannot execute. which()
     // prefers `ocr.cmd` (see deps/which.ts).
     const bin = this.opts.ocrBin ?? (await which('ocr')) ?? 'ocr';
+    signal?.throwIfAborted();
     // Windows cannot spawn .cmd/.bat shims (npm's `ocr` is an .cmd) without
     // a shell. shell:true lets node quote the binary path correctly; args
     // are platform-constructed (no free-form user input reaches them —
@@ -317,7 +281,8 @@ export class OcrRunner {
           child.kill();
         }
       };
-      onSpawn({ kill: killTree });
+      const unbind = bindProcessAbort(child, signal);
+      onSpawn({ kill: () => { if (!signal?.aborted) killTree(); } });
 
       let stderr = '';
       let stdout = '';
@@ -354,17 +319,21 @@ export class OcrRunner {
       }, 60_000);
 
       child.on('error', (err) => {
+        unbind();
         clearTimeout(timer);
         clearInterval(heartbeat);
         resolve({ exitCode: -1, error: `无法启动 ocr: ${err.message}` });
       });
       child.on('close', (code) => {
+        unbind();
         clearTimeout(timer);
         clearInterval(heartbeat);
-        if (code === 0) resolve({ exitCode: 0, reportPath: args[args.length - 1] });
+        if (code === 0 && !timedOut) {
+          resolve({ exitCode: 0, reportPath: args[args.indexOf('--output') + 1] });
+        }
         else
           resolve({
-            exitCode: code ?? -1,
+            exitCode: timedOut ? -1 : code ?? -1,
             error: describeOcrFailure(code, timedOut, timeoutMs, stderr, stdout),
           });
       });
@@ -372,7 +341,7 @@ export class OcrRunner {
   }
 }
 
-export { loadRepoAuth, injectCredentialsInUrl };
+export { loadRepoAuth };
 
 /**
  * Build the task error for a non-zero ocr exit. ocr prints its real failure

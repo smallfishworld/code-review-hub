@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { bindProcessAbort } from '../vcs/processAbort.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -185,8 +186,9 @@ async function probeWithOcr(
 export function runCapture(
   command: string,
   args: string[],
-  opts: { env: Record<string, string>; timeoutMs: number; input?: string }
+  opts: { env: Record<string, string>; timeoutMs: number; input?: string; signal?: AbortSignal }
 ): Promise<{ code: number | null; output: string }> {
+  opts.signal?.throwIfAborted();
   // Windows cannot spawn npm's `ocr.cmd` shim without a shell (EINVAL), and
   // the shim is what `which('ocr')` resolves to there. Same handling as the
   // review runner: shell only for a .cmd/.bat on win32.
@@ -196,7 +198,9 @@ export function runCapture(
       env: opts.env,
       windowsHide: true,
       shell: needsShell,
+      detached: Boolean(opts.signal) && process.platform !== 'win32',
     });
+    const unbind = bindProcessAbort(child, opts.signal);
     let output = '';
     let settled = false;
     // Optional pipelined stdin (used by the MCP stdio probe): write the
@@ -211,6 +215,7 @@ export function runCapture(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      unbind();
       resolve({ code, output });
     };
     // On Windows a timed-out shell shim only kills cmd.exe and the real ocr

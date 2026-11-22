@@ -5,11 +5,7 @@ import { defaultEngineId, getEngineRow, type EngineRow } from './registry.js';
  * Three-level engine selection (openspec D2):
  *   监控规则 engine_id → 仓库 engine_id → 全局默认（setting, 兜底第一条 enabled）。
  *
- * Task rows don't carry the triggering rule (multiple auto rules can hit the
- * same node), so the rule level resolves from the repo's enabled monitor
- * rules: the first rule pinning an engine wins. A missing or disabled engine
- * NEVER silently falls back — the task fails with the reason (spec:
- * 三级引擎选择 / 引擎被删除后触发).
+ * Only the rule that triggered an automatic task can supply a rule override.
  */
 
 export class EngineResolveError extends Error {
@@ -27,15 +23,17 @@ export interface ResolvedEngine {
   source: 'rule' | 'repo' | 'default';
 }
 
-export function resolveEngineForRepo(db: Database.Database, repoId: number): ResolvedEngine {
-  // 1. rule level: first enabled rule of the repo pinning an engine
-  const ruleRow = db
+export function resolveEngineForRepo(
+  db: Database.Database,
+  repoId: number,
+  monitorRuleId?: number
+): ResolvedEngine {
+  const ruleRow = monitorRuleId === undefined ? undefined : db
     .prepare(
       `SELECT engine_id FROM monitor_rule
-       WHERE repo_id = ? AND enabled = 1 AND engine_id IS NOT NULL
-       ORDER BY id LIMIT 1`
+       WHERE repo_id = ? AND id = ? AND engine_id IS NOT NULL`
     )
-    .get(repoId) as { engine_id: number } | undefined;
+    .get(repoId, monitorRuleId) as { engine_id: number } | undefined;
   if (ruleRow) {
     const row = getEngineRow(db, ruleRow.engine_id);
     if (!row) {

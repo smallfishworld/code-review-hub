@@ -1,4 +1,8 @@
 import { spawn } from 'node:child_process';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { withWorkspaceLock } from './workspaceLock.js';
+import { bindProcessAbort } from './processAbort.js';
 
 export class SvnError extends Error {
   constructor(
@@ -23,6 +27,7 @@ export interface RunOptions {
   timeoutMs?: number;
   /** Extra env entries (merged over process.env). */
   env?: Record<string, string>;
+  signal?: AbortSignal;
   /** Callback used by task cancellation to kill the process. */
   onSpawn?: (child: ReturnType<typeof spawn>) => void;
   /**
@@ -42,6 +47,7 @@ export function runSvn(
   auth: SvnAuth = {},
   opts: RunOptions = {}
 ): Promise<{ stdout: string; stderr: string; code: number }> {
+  opts.signal?.throwIfAborted();
   const fullArgs = [...args];
   if (auth.username) {
     fullArgs.push('--username', auth.username);
@@ -59,8 +65,10 @@ export function runSvn(
       cwd: opts.cwd,
       windowsHide: true,
       shell: false,
+      detached: Boolean(opts.signal) && process.platform !== 'win32',
       env: opts.env ? { ...process.env, ...opts.env } : process.env,
     });
+    const unbind = bindProcessAbort(child, opts.signal);
     opts.onSpawn?.(child);
 
     let stdout = '';
@@ -83,6 +91,7 @@ export function runSvn(
       stderr += d.toString('utf8');
     });
     child.on('error', (err) => {
+      unbind();
       if (!settled) {
         settled = true;
         if (timer) clearTimeout(timer);
@@ -90,10 +99,13 @@ export function runSvn(
       }
     });
     child.on('close', (code) => {
+      unbind();
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
-      if (code === 0) {
+      if (opts.signal?.aborted) {
+        reject(opts.signal.reason);
+      } else if (code === 0) {
         resolve({ stdout, stderr, code });
       } else {
         reject(new SvnError(`svn ${args[0]} exited with code ${code}`, code, stderr.trim()));
@@ -266,9 +278,34 @@ export function parseSvnLogXml(xml: string): SvnLogEntry[] {
 }
 
 /** Verify connectivity to an SVN URL; throws SvnError with detail on failure. */
-export async function svnInfo(url: string, auth: SvnAuth = {}): Promise<SvnInfo> {
-  const { stdout } = await runSvn(['info', '--xml', url], auth, { timeoutMs: 30_000 });
+export async function svnInfo(url: string, auth: SvnAuth = {}, opts: RunOptions = {}): Promise<SvnInfo> {
+  const { stdout } = await runSvn(['info', '--xml', url], auth, { timeoutMs: 30_000, ...opts });
   return parseSvnInfoXml(stdout);
+}
+
+/** Initialize a managed cache, replacing a stale checkout left by older versions. */
+export async function ensureSvnWorkspace(
+  path: string,
+  url: string,
+  auth: SvnAuth,
+  opts: RunOptions = {}
+): Promise<void> {
+  const normalizeUrl = (value: string) => new URL(value).href.replace(/\/+$/, '');
+  await withWorkspaceLock(path, opts.signal, async () => {
+    if (existsSync(join(path, '.svn'))) {
+      const current = await svnInfo(path, auth, opts);
+      if (normalizeUrl(current.url) === normalizeUrl(url)) return;
+      const expected = await svnInfo(url, auth, opts);
+      if (normalizeUrl(current.url) === normalizeUrl(expected.url)) return;
+      rmSync(path, { recursive: true, force: true });
+    }
+    mkdirSync(path, { recursive: true });
+    await runSvn(['checkout', url, path], auth, {
+      timeoutMs: 30 * 60_000,
+      ...opts,
+      cacheAuth: true,
+    });
+  });
 }
 
 /** Update a working copy to a revision (default HEAD), populating any
@@ -283,8 +320,8 @@ export async function svnUpdate(
     ['update', '-r', String(revision), '--set-depth', 'infinity', workingCopyPath],
     auth,
     {
-      timeoutMs: opts.timeoutMs ?? 30 * 60_000,
-      onSpawn: opts.onSpawn,
+      timeoutMs: 30 * 60_000,
+      ...opts,
     }
   );
 }

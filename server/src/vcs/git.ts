@@ -1,4 +1,8 @@
 import { spawn } from 'node:child_process';
+import { existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { withWorkspaceLock } from './workspaceLock.js';
+import { bindProcessAbort } from './processAbort.js';
 
 export class GitError extends Error {
   constructor(
@@ -21,25 +25,24 @@ export interface GitRunOptions {
   cwd?: string;
   timeoutMs?: number;
   env?: Record<string, string>;
+  signal?: AbortSignal;
   onSpawn?: (child: ReturnType<typeof spawn>) => void;
 }
 
 /**
  * Run a git command in a repo directory (or globally when no cwd).
- * Credentials are passed per-invocation via stdin-askpass or URL-embedded
- * userinfo — never written to any config or credential store.
+ * Remote invocations use an ephemeral credential helper (see gitRemote).
  */
 export function runGit(
   args: string[],
   opts: GitRunOptions = {}
 ): Promise<{ stdout: string; stderr: string; code: number }> {
+  opts.signal?.throwIfAborted();
   const env: Record<string, string> = {
     ...(process.env as unknown as Record<string, string>),
     ...opts.env,
   };
-  // Never prompt or cache anything: credentials are injected per-call into
-  // the remote URL by injectCredentialsInUrl() (see callers), and git must
-  // not consult global/system config stores for them.
+  // A service process must never prompt for credentials.
   env['GIT_TERMINAL_PROMPT'] = '0';
   env['GIT_ASKPASS'] = '';
   env['GIT_CONFIG_NOSYSTEM'] = '1';
@@ -49,8 +52,10 @@ export function runGit(
       cwd: opts.cwd,
       windowsHide: true,
       shell: false,
+      detached: Boolean(opts.signal) && process.platform !== 'win32',
       env,
     });
+    const unbind = bindProcessAbort(child, opts.signal);
     opts.onSpawn?.(child);
 
     let stdout = '';
@@ -73,6 +78,7 @@ export function runGit(
       stderr += d.toString('utf8');
     });
     child.on('error', (err) => {
+      unbind();
       if (!settled) {
         settled = true;
         if (timer) clearTimeout(timer);
@@ -80,10 +86,13 @@ export function runGit(
       }
     });
     child.on('close', (code) => {
+      unbind();
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
-      if (code === 0) {
+      if (opts.signal?.aborted) {
+        reject(opts.signal.reason);
+      } else if (code === 0) {
         resolve({ stdout, stderr, code });
       } else {
         reject(new GitError(`git ${args[0]} exited with code ${code}`, code, stderr.trim()));
@@ -92,20 +101,88 @@ export function runGit(
   });
 }
 
-/**
- * Embed credentials in a remote URL: https://host/path -> https://user:pass@host/path.
- * Callers keep the credentialed URL in memory only — never persisted, never
- * logged, never written to git config.
- */
-export function injectCredentialsInUrl(url: string, auth: GitAuth): string {
-  if (!auth.username && !auth.password) return url;
-  // Only http(s) supports userinfo credentials.
-  const m = /^(https?)(:\/\/)(.+)$/.exec(url);
-  if (!m) return url;
-  const userinfo = `${encodeURIComponent(auth.username ?? '')}:${encodeURIComponent(auth.password ?? '')}`;
-  // Strip any existing userinfo before injecting.
-  const rest = m[3].replace(/^[^@/]+@/, '');
-  return `${m[1]}${m[2]}${userinfo}@${rest}`;
+const TEMPORARY_HELPER = `!f() {
+  if [ "$1" = get ]; then
+    printf 'username=%s\\npassword=%s\\n' "$CRP_GIT_USERNAME" "$CRP_GIT_PASSWORD"
+  fi
+}; f`;
+
+/** Keep secrets in the process environment and scope the helper to the remote host. */
+export function gitRemote(
+  url: string,
+  auth: GitAuth = {},
+  inheritedEnv: Record<string, string> = {}
+): { url: string; env: Record<string, string> } {
+  if (!/^https?:\/\//i.test(url)) return { url, env: inheritedEnv };
+  const remote = new URL(url);
+  const explicitAuth = Boolean(auth.username || auth.password);
+  const username = explicitAuth ? auth.username ?? '' : decodeURIComponent(remote.username);
+  const password = explicitAuth ? auth.password ?? '' : decodeURIComponent(remote.password);
+  if (/[\r\n\0]/.test(username) || /[\r\n\0]/.test(password)) {
+    throw new GitError('Git 凭据含换行或空字符', null, '');
+  }
+  const hadUserinfo = Boolean(remote.username || remote.password);
+  remote.username = '';
+  remote.password = '';
+  const env = { ...inheritedEnv, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '', GIT_CONFIG_NOSYSTEM: '1' };
+  // Git propagates -c settings to subprocesses in this format. It also
+  // works on Git versions that predate GIT_CONFIG_COUNT.
+  const gitQuote = (value: string) => "'" + value.replace(/'/g, "'\\''") + "'";
+  const config = [
+    inheritedEnv.GIT_CONFIG_PARAMETERS ?? process.env.GIT_CONFIG_PARAMETERS ?? '',
+    gitQuote('credential.helper='),
+  ];
+  if (username || password) {
+    config.push(gitQuote(`credential.${remote.origin}.helper=${TEMPORARY_HELPER}`));
+    Object.assign(env, { CRP_GIT_USERNAME: username, CRP_GIT_PASSWORD: password });
+  }
+  return { url: hadUserinfo ? remote.href : url, env: { ...env, GIT_CONFIG_PARAMETERS: config.join(' ').trim() } };
+}
+
+export async function scrubGitCloneCredentials(repoDir: string): Promise<void> {
+  let output: string;
+  try {
+    ({ stdout: output } = await runGit(['config', '--local', '--get-all', 'remote.origin.url'], { cwd: repoDir }));
+  } catch (err) {
+    if (err instanceof GitError && err.exitCode === 1) return; // no origin
+    throw err;
+  }
+  const urls = output.trimEnd().split(/\r?\n/);
+  const clean = urls.map((url) => {
+    if (!/^https?:\/\//i.test(url)) return url;
+    const remote = new URL(url);
+    if (!remote.username && !remote.password) return url;
+    remote.username = '';
+    remote.password = '';
+    return remote.href;
+  });
+  if (clean.some((url, index) => url !== urls[index])) {
+    await runGit(['config', '--local', '--replace-all', 'remote.origin.url', clean[0]], { cwd: repoDir });
+    for (const url of clean.slice(1)) {
+      await runGit(['config', '--local', '--add', 'remote.origin.url', url], { cwd: repoDir });
+    }
+  }
+}
+
+/** Clean managed clones created before credentials moved out of remote URLs. */
+export async function scrubCachedGitCredentials(
+  dataDir: string,
+  onError: (name: string) => void
+): Promise<void> {
+  for (const category of ['workcopies', 'node-cache']) {
+    const root = join(dataDir, category);
+    if (!existsSync(root)) continue;
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory() || !/^\d+(?:-v\d+)?$/.test(entry.name)) continue;
+      const dir = join(root, entry.name);
+      if (!existsSync(join(dir, '.git', 'config'))) continue;
+      try {
+        await scrubGitCloneCredentials(dir);
+      } catch {
+        onError(`${category}/${entry.name}`);
+      }
+    }
+  }
 }
 
 /** Check a remote is reachable and readable. Returns the default HEAD sha. */
@@ -114,9 +191,10 @@ export async function gitLsRemote(
   auth: GitAuth = {},
   opts: GitRunOptions = {}
 ): Promise<{ refs: { ref: string; sha: string }[] }> {
-  const credentialed = injectCredentialsInUrl(url, auth);
-  const { stdout } = await runGit(['ls-remote', credentialed], {
+  const remote = gitRemote(url, auth, opts.env);
+  const { stdout } = await runGit(['ls-remote', '--', remote.url], {
     ...opts,
+    env: remote.env,
     timeoutMs: opts.timeoutMs ?? 60_000,
   });
   const refs: { ref: string; sha: string }[] = [];
@@ -134,11 +212,24 @@ export async function gitClone(
   auth: GitAuth = {},
   opts: GitRunOptions = {}
 ): Promise<void> {
-  const credentialed = injectCredentialsInUrl(url, auth);
+  const remote = gitRemote(url, auth, opts.env);
   await runGit(
-    ['clone', '--filter=blob:none', '--no-checkout', credentialed, dest],
-    { ...opts, timeoutMs: opts.timeoutMs ?? 30 * 60_000 }
+    ['clone', '--filter=blob:none', '--no-checkout', '--', remote.url, dest],
+    { ...opts, env: remote.env, timeoutMs: opts.timeoutMs ?? 30 * 60_000 }
   );
+}
+
+export async function ensureGitClone(
+  dest: string,
+  url: string,
+  auth: GitAuth,
+  opts: GitRunOptions = {}
+): Promise<void> {
+  await withWorkspaceLock(dest, opts.signal, async () => {
+    if (existsSync(join(dest, '.git'))) return;
+    mkdirSync(dirname(dest), { recursive: true });
+    await gitClone(url, dest, auth, opts);
+  });
 }
 
 export interface GitLogEntry {
@@ -150,6 +241,23 @@ export interface GitLogEntry {
   date: string;
   message: string;
   files: string[];
+}
+
+async function readGitLog(cwd: string, args: string[], opts: GitRunOptions): Promise<GitLogEntry[]> {
+  const runOptions = { ...opts, cwd, timeoutMs: opts.timeoutMs ?? 60_000 };
+  const { stdout } = await runGit(
+    ['log', '--topo-order', '--format=%x1e%H%n%an%n%ae%n%aI%n%s%n%P', '--no-renames', '--name-only', '-z', ...args],
+    runOptions
+  );
+  const entries = parseGitLogRecords(stdout, true);
+  for (const { entry, parents } of entries) {
+    if (parents.length < 2) continue;
+    // Git omits merge diffs from a plain log. Include the effective change
+    // introduced onto the destination branch, including conflict resolutions.
+    const diff = await runGit(['diff', '--no-renames', '--name-only', '-z', parents[0], entry.sha], runOptions);
+    entry.files = diff.stdout.split('\0').filter(Boolean);
+  }
+  return entries.map(({ entry }) => entry);
 }
 
 /**
@@ -164,18 +272,7 @@ export async function gitLog(
   to: string,
   opts: GitRunOptions = {}
 ): Promise<GitLogEntry[]> {
-  const { stdout } = await runGit(
-    [
-      'log',
-      '--reverse',
-      '--format=%x1e%H%n%an%n%ae%n%aI%n%s',
-      '--name-only',
-      '-z',
-      `${from}..${to}`,
-    ],
-    { ...opts, cwd, timeoutMs: opts.timeoutMs ?? 60_000 }
-  );
-  return parseGitLogOutput(stdout);
+  return readGitLog(cwd, ['--reverse', from ? `${from}..${to}` : to], opts);
 }
 
 /**
@@ -189,20 +286,7 @@ export async function gitLogRecent(
   count: number,
   opts: GitRunOptions = {}
 ): Promise<GitLogEntry[]> {
-  const { stdout } = await runGit(
-    [
-      'log',
-      '--reverse',
-      '--format=%x1e%H%n%an%n%ae%n%aI%n%s',
-      '--name-only',
-      '-z',
-      `-n`,
-      String(Math.max(1, count)),
-      ref,
-    ],
-    { ...opts, cwd, timeoutMs: opts.timeoutMs ?? 60_000 }
-  );
-  return parseGitLogOutput(stdout);
+  return readGitLog(cwd, ['--reverse', '-n', String(Math.max(1, count)), ref], opts);
 }
 
 /**
@@ -217,26 +301,16 @@ export async function gitLogPage(
   count: number,
   opts: GitRunOptions = {}
 ): Promise<GitLogEntry[]> {
-  const { stdout } = await runGit(
-    [
-      'log',
-      '--format=%x1e%H%n%an%n%ae%n%aI%n%s',
-      '--name-only',
-      '-z',
-      '--skip',
-      String(Math.max(0, skip)),
-      '-n',
-      String(Math.max(1, count)),
-      ref,
-    ],
-    { ...opts, cwd, timeoutMs: opts.timeoutMs ?? 60_000 }
-  );
-  return parseGitLogOutput(stdout); // git log order: newest-first
+  return readGitLog(cwd, ['--skip', String(Math.max(0, skip)), '-n', String(Math.max(1, count)), ref], opts);
 }
 
 export function parseGitLogOutput(stdout: string): GitLogEntry[] {
+  return parseGitLogRecords(stdout, false).map(({ entry }) => entry);
+}
+
+function parseGitLogRecords(stdout: string, hasParents: boolean): { entry: GitLogEntry; parents: string[] }[] {
   const sep = '\u001e';
-  const entries: GitLogEntry[] = [];
+  const entries: { entry: GitLogEntry; parents: string[] }[] = [];
   // Split into record blocks by the record separator.
   const blocks = stdout.split(sep).filter((b) => b.trim().length > 0);
   for (const block of blocks) {
@@ -246,14 +320,18 @@ export function parseGitLogOutput(stdout: string): GitLogEntry[] {
     const lines = normalized.split(/\r?\n/);
     const [sha, authorName, authorEmail, date, subject, ...fileLines] = lines;
     if (!sha || !/^[0-9a-f]{40}$/.test(sha)) continue;
+    const parents = hasParents ? (fileLines.shift() ?? '').split(' ').filter(Boolean) : [];
     entries.push({
-      sha,
-      shortSha: sha.slice(0, 7),
-      authorName: authorName ?? '',
-      authorEmail: authorEmail ?? '',
-      date: date ?? '',
-      message: subject ?? '',
-      files: (fileLines ?? []).filter((f) => f.trim().length > 0),
+      entry: {
+        sha,
+        shortSha: sha.slice(0, 7),
+        authorName: authorName ?? '',
+        authorEmail: authorEmail ?? '',
+        date: date ?? '',
+        message: subject ?? '',
+        files: fileLines.filter((f) => f.trim().length > 0),
+      },
+      parents,
     });
   }
   return entries;
@@ -267,16 +345,17 @@ export async function gitPrepareCommit(
   auth: GitAuth = {},
   opts: GitRunOptions = {}
 ): Promise<void> {
-  // Fetch from the credentialed URL (config 'origin' may lack credentials).
-  const credentialed = injectCredentialsInUrl(remoteUrl, auth);
-  await runGit(['fetch', '--no-tags', credentialed, sha], {
+  const remote = gitRemote(remoteUrl, auth, opts.env);
+  await runGit(['fetch', '--no-tags', '--', remote.url, sha], {
     cwd: repoDir,
     ...opts,
+    env: remote.env,
     timeoutMs: opts.timeoutMs ?? 5 * 60_000,
   });
   await runGit(['checkout', '--force', sha], {
     cwd: repoDir,
     ...opts,
+    env: remote.env,
     timeoutMs: opts.timeoutMs ?? 5 * 60_000,
   });
 }
@@ -296,6 +375,7 @@ export async function gitResolveSha(
     const sha = stdout.trim();
     return /^[0-9a-f]{40}$/.test(sha) ? sha : null;
   } catch {
+    opts.signal?.throwIfAborted();
     return null;
   }
 }
@@ -308,12 +388,13 @@ export async function gitFetchBranch(
   auth: GitAuth = {},
   opts: GitRunOptions = {}
 ): Promise<void> {
-  const credentialed = injectCredentialsInUrl(remoteUrl, auth);
+  const remote = gitRemote(remoteUrl, auth, opts.env);
   // Fetch into the remote-tracking ref so callers can resolve origin/<branch>.
   // (A bare `git fetch <url> <branch>` only writes FETCH_HEAD.)
-  await runGit(['fetch', '--no-tags', credentialed, `+refs/heads/${branch}:refs/remotes/origin/${branch}`], {
+  await runGit(['fetch', '--no-tags', '--', remote.url, `+refs/heads/${branch}:refs/remotes/origin/${branch}`], {
     cwd: repoDir,
     ...opts,
+    env: remote.env,
     timeoutMs: opts.timeoutMs ?? 5 * 60_000,
   });
 }

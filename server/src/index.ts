@@ -6,6 +6,7 @@ import { CredentialService } from './crypto/credentialService.js';
 import { buildRepoRoutes } from './repos/repoRoutes.js';
 import { TaskQueue } from './tasks/taskQueue.js';
 import { ReportService } from './tasks/reportService.js';
+import { scrubCachedGitCredentials } from './vcs/git.js';
 import { TaskEventHub } from './tasks/taskEvents.js';
 import { buildTaskRoutes } from './tasks/taskRoutes.js';
 import { WorkspaceInitService } from './tasks/workspaceInit.js';
@@ -77,13 +78,16 @@ async function main() {
 
   // --- core services -------------------------------------------------------
   const db = openDatabase({ dataDir });
+  await scrubCachedGitCredentials(dataDir, (cache) => {
+    logs.warn('server', `无法清理 Git 缓存凭据: ${cache}`);
+  });
   const credentials = new CredentialService(db, new SecretStore(join(dataDir, 'keys')));
   bootstrapEngines(db); // 幂等：空库插入默认 ocr 引擎并设为全局默认
   ensureBuiltinMemoryQuery(db); // 幂等：内置记忆查询 MCP 桥（system 行，管理员可停用）
   const engineExecutor = new EngineExecutor(db, credentials, { dataDir, logs });
-  const queue = new TaskQueue(db, engineExecutor.execute, 2, logs);
-
   const reports = new ReportService(db);
+  reports.recoverLegacyIndexes(dataDir);
+  const queue = new TaskQueue(db, engineExecutor.execute, 2, logs, reports);
   const events = new TaskEventHub(db, queue, reports, dataDir, credentials);
   events.start();
 

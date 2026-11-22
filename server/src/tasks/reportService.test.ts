@@ -124,6 +124,25 @@ describe('parseOcrReport (real ocr jsonOutput shape)', () => {
 });
 
 describe('ReportService persistence', () => {
+  it('repairs historical successes with unindexed outputs without replaying completed tasks', () => {
+    const recovered = seedTask(db);
+    const repo = db.prepare('SELECT repo_id FROM task WHERE id = ?').get(recovered) as { repo_id: number };
+    const missing = Number(db.prepare(
+      "INSERT INTO task (repo_id, node, trigger, status) VALUES (?, 'r200', 'manual', 'succeeded')"
+    ).run(repo.repo_id).lastInsertRowid);
+    mkdirSync(join(dir, 'reports'), { recursive: true });
+    writeFileSync(join(dir, 'reports', `${recovered}.json`), REAL_SVN_SAMPLE);
+    const reports = new ReportService(db);
+    reports.recoverLegacyIndexes(dir);
+    const first = reports.issues(recovered);
+    reports.recoverLegacyIndexes(dir);
+    expect(first).toHaveLength(2);
+    expect(reports.issues(recovered)).toEqual(first);
+    expect(db.prepare('SELECT status, error FROM task WHERE id = ?').get(missing)).toEqual({
+      status: 'failed', error: '历史评审报告缺失',
+    });
+  });
+
   it('indexes a real-format report: summary + issues in DB, raw file kept', () => {
     const taskId = seedTask(db);
     const rawPath = join(dir, 'reports', `${taskId}.json`);

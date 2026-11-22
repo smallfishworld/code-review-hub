@@ -67,12 +67,13 @@ describe('resolveEngineForRepo', () => {
       .prepare("INSERT INTO engine (name, kind, enabled) VALUES ('rule-eng', 'ocr', 1)")
       .run();
     db.prepare('UPDATE repo SET engine_id = ? WHERE id = 1').run(Number(repo.lastInsertRowid));
-    db.prepare(
+    const ruleId = Number(db.prepare(
       'INSERT INTO monitor_rule (repo_id, interval_seconds, engine_id, enabled) VALUES (1, 60, ?, 1)'
-    ).run(Number(rule.lastInsertRowid));
-    const resolved = resolveEngineForRepo(db, 1);
+    ).run(Number(rule.lastInsertRowid)).lastInsertRowid);
+    const resolved = resolveEngineForRepo(db, 1, ruleId);
     expect(resolved.source).toBe('rule');
     expect(resolved.row.name).toBe('rule-eng');
+    expect(resolveEngineForRepo(db, 1).row.name).toBe('repo-eng');
   });
 
   it('fails without fallback when the referenced engine is missing', () => {
