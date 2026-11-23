@@ -5,11 +5,13 @@ import type Database from 'better-sqlite3';
 import type { CredentialService } from '../crypto/credentialService.js';
 import type { LogService } from '../logs/logService.js';
 import { OcrRunner, workCopyDir } from '../tasks/ocrRunner.js';
-import { ensureSvnWorkspace, svnUpdate, runSvn } from '../vcs/svn.js';
+import { ensureSvnWorkspace, svnUpdate, runSvn, SvnError } from '../vcs/svn.js';
 import { runGit, ensureGitClone, gitFetchBranch, gitPrepareCommit, gitRemote, gitResolveSha, type GitRunOptions } from '../vcs/git.js';
 import {
   buildOcrConfig,
   prepareOcrHomeSvnConfig,
+  writeSvnSimpleCredential,
+  readSvnSimpleRealms,
   resolveTaskProvider,
   type OcrConfigFile,
   type OcrProviderSettings,
@@ -167,6 +169,16 @@ export class OcrEngine implements ReviewEngine {
       if (ctx.auth.type === 'svn') {
         this.opts.logs?.info('task', `#${ctx.task.id} 同步 SVN 工作副本到 r${ctx.task.node}…`);
         await this.prepareSvnWorkCopy(ctx, workspacePath, homeEnv);
+        // Seed + rewrite the slot's svn credential store in plain format and
+        // verify it works BEFORE the review: a wincrypt entry seeded by a
+        // different svn build fails mid-review as an auth-prompt hang that
+        // burns the whole timeout (observed in production logs). Failing here
+        // surfaces the real cause within seconds instead. Seeding is NOT
+        // inherited from workspaceInit: each workspace slot has its own HOME,
+        // and the seeding checkout may have been skipped (copy already
+        // exists), so the entry is forced here with explicit auth flags.
+        await this.seedSvnCredentialsPlain(ctx, home, homeEnv);
+        await this.verifySvnCredentials(ctx, ctx.auth.url, homeEnv);
       } else {
         this.opts.logs?.info('task', `#${ctx.task.id} 同步 Git 仓库到 ${ctx.task.node.slice(0, 10)}…`);
         await this.prepareGitClone(ctx, workspacePath);
@@ -255,6 +267,81 @@ export class OcrEngine implements ReviewEngine {
     await ensureSvnWorkspace(wcDir, ctx.auth.url, ctx.auth, opts);
     const rev = validatedNode('svn', ctx.task.node);
     await svnUpdate(wcDir, Number(rev), ctx.auth, opts);
+  }
+
+  /**
+   * Ensure THIS slot's isolated HOME has a working plain-format svn.simple
+   * entry for the repo realm:
+   *
+   * 1. Force-seed the store: run `svn info` WITH explicit auth and
+   *    cacheAuth, so svn writes an entry for the realm even when the
+   *    workspace checkout was skipped (existing copy) and nothing else
+   *    would have seeded this slot's fresh HOME.
+   * 2. Rewrite every realm entry in plain format with the platform's
+   *    stored password: `--non-interactive` svn on Windows may write
+   *    `passtype wincrypt` (DPAPI) entries — unreadable by a different
+   *    svn build on the same host (observed in production).
+   *
+   * No-op for anonymous access (no username/password configured).
+   */
+  private async seedSvnCredentialsPlain(
+    ctx: PrepareContext,
+    home: string,
+    homeEnv: Record<string, string>
+  ): Promise<void> {
+    const auth = { username: ctx.auth.username, password: ctx.auth.password };
+    if (!auth.username || !auth.password) return;
+    try {
+      await runSvn(['info', ctx.auth.url], auth, {
+        ...this.vcsOptions(ctx),
+        timeoutMs: 60_000,
+        env: homeEnv,
+        cacheAuth: true,
+      });
+    } catch (err) {
+      ctx.signal?.throwIfAborted();
+      const reason = svnFailureDetail(err);
+      throw new Error(`SVN 凭据写入失败（用户名或密码可能不正确）: ${reason}`, { cause: err });
+    }
+    for (const { realm } of readSvnSimpleRealms(home)) {
+      if (!realm) continue;
+      writeSvnSimpleCredential(home, realm, auth.username, auth.password);
+      this.opts.logs?.info(
+        'task',
+        `#${ctx.task.id} SVN 凭据已按明文格式写入（realm: ${realm}）`
+      );
+    }
+  }
+
+  /**
+   * Self-check that the isolated home's svn credentials actually work for a
+   * non-interactive server round-trip — the exact failure mode that otherwise
+   * only shows up as code_search auth storms 30 minutes into the review.
+   */
+  private async verifySvnCredentials(
+    ctx: PrepareContext,
+    url: string,
+    homeEnv: Record<string, string>
+  ): Promise<void> {
+    // `svn info` against the repo URL exercises the credential store without
+    // touching the working copy. No --username/--password: ocr's internal svn
+    // calls run bare, so the store must answer on its own.
+    try {
+      await runSvn(['info', '--non-interactive', url], {}, {
+        ...this.vcsOptions(ctx),
+        timeoutMs: 60_000,
+        env: homeEnv,
+      });
+    } catch (err) {
+      ctx.signal?.throwIfAborted();
+      const reason = svnFailureDetail(err);
+      // A timeout is a server-reachability problem, not bad credentials —
+      // do not send the operator chasing the wrong cause.
+      const hint = /timed out/i.test(reason)
+        ? 'SVN 服务器访问超时（网络问题，非凭据问题）'
+        : 'SVN 凭据自检失败（ocr 内部 svn 将无法认证，请检查仓库的 SVN 用户名/密码配置）';
+      throw new Error(`${hint}: ${reason}`, { cause: err });
+    }
   }
 
   /** Bootstrap + fetch + checkout the git clone at the task commit. */
@@ -396,3 +483,16 @@ export function sampleIdentifiers(files: string[], addedLines: string[]): string
   return [...out].slice(0, 200);
 }
 
+/**
+ * Human-readable svn failure text. `SvnError.message` only carries
+ * "svn <subcommand> exited with code N"; the actionable cause is on stderr
+ * (E170001 auth, E170013 unreachable, E215004 wrong password …). Without
+ * this, the task log says nothing an operator can act on.
+ */
+function svnFailureDetail(err: unknown): string {
+  if (err instanceof SvnError) {
+    const detail = err.stderr.trim();
+    return detail ? `${err.message}: ${detail}` : err.message;
+  }
+  return err instanceof Error ? err.message : String(err);
+}

@@ -4,7 +4,11 @@ import { workCopyDir } from './ocrRunner.js';
 import { ensureGitClone } from '../vcs/git.js';
 import { ensureSvnWorkspace } from '../vcs/svn.js';
 import { ocrHomeDir } from '../engines/ocrEngine.js';
-import { prepareOcrHomeSvnConfig } from '../providers/ocrProviderConfig.js';
+import {
+  prepareOcrHomeSvnConfig,
+  readSvnSimpleRealms,
+  writeSvnSimpleCredential,
+} from '../providers/ocrProviderConfig.js';
 import type { LogService } from '../logs/logService.js';
 
 /**
@@ -79,6 +83,17 @@ export class WorkspaceInitService {
         const home = ocrHomeDir(this.dataDir, row.id, row.source_version);
         prepareOcrHomeSvnConfig(home);
         await ensureSvnWorkspace(wcDir, row.url, auth, { env: { HOME: home, USERPROFILE: home } });
+        // The seeding svn may store wincrypt/DPAPI entries that another svn
+        // build cannot read; rewrite them in plain format with the platform's
+        // stored password (see ocrProviderConfig for the failure analysis).
+        if (auth.username && auth.password) {
+          for (const { realm } of readSvnSimpleRealms(home)) {
+            if (realm) {
+              writeSvnSimpleCredential(home, realm, auth.username, auth.password);
+              this.logs?.info('task', `仓库 #${row.id} SVN 凭据已按明文格式写入（realm: ${realm}）`);
+            }
+          }
+        }
       } else {
         await ensureGitClone(wcDir, row.url, auth);
       }

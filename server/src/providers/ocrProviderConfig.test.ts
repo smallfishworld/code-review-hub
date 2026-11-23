@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDatabase } from '../db/database.js';
@@ -8,6 +8,10 @@ import { CredentialService } from '../crypto/credentialService.js';
 import {
   buildOcrConfig,
   prepareOcrHome,
+  prepareOcrHomeSvnConfig,
+  writeSvnSimpleCredential,
+  readSvnSimpleRealms,
+  ocrHomeSvnDir,
   resolveProvider,
   resolveRepositoryProvider,
   resolveTaskProvider,
@@ -168,4 +172,71 @@ describe('ocr provider config bridge', () => {
     expect(prepareOcrHome(join(dir, 'data'), null)).toBeNull();
   });
 
+  it('writes svn config pinning plaintext credential storage', () => {
+    const home = join(dir, 'home');
+    prepareOcrHomeSvnConfig(home);
+    const config = readFileSync(join(ocrHomeSvnDir(home), 'config'), 'utf8');
+    expect(config).toContain('store-passwords = yes');
+    expect(config).toContain('store-plaintext-passwords = yes');
+    // servers (cert trust) must still be written alongside config
+    expect(readFileSync(join(ocrHomeSvnDir(home), 'servers'), 'utf8'))
+      .toContain('trust-server-cert-failures');
+  });
+
+  it('writes and reads back a plain svn.simple credential entry', () => {
+    const home = join(dir, 'home');
+    prepareOcrHomeSvnConfig(home);
+    const realm = '<https://192.0.0.121:443> SVN-Thermography';
+    const path = writeSvnSimpleCredential(home, realm, 'yuwenxuan', 'p@ss 密码');
+    // File name is md5(realm), svn's convention for svn.simple entries.
+    expect(path).toBe(join(ocrHomeSvnDir(home), 'auth', 'svn.simple', 'b533d28b3df3e9374ac47b17bd8c5c92'));
+    const content = readFileSync(path, 'utf8');
+    // No wincrypt: a plain entry carries a plaintext password, so any svn
+    // build (1.14-seeded store read by 1.15 runner, etc.) can use it.
+    expect(content).not.toContain('wincrypt');
+    expect(content).toContain('svn:realmstring');
+    // passtype MUST be "simple": svn's auth provider reads this key to decide
+    // whether the entry is usable. An empty value makes svn skip the file and
+    // fail with E170001 "Can't get username or password" (verified against
+    // svn 1.15); this regression broke every intranet review.
+    expect(content).toBe(
+      'K 8\npasstype\nV 6\nsimple\n' +
+      'K 8\npassword\nV 11\np@ss 密码\n' +
+      'K 15\nsvn:realmstring\nV 42\n<https://192.0.0.121:443> SVN-Thermography\n' +
+      'K 8\nusername\nV 9\nyuwenxuan\n' +
+      'END\n'
+    );
+    const realms = readSvnSimpleRealms(home);
+    expect(realms).toHaveLength(1);
+    expect(realms[0].realm).toBe(realm);
+    expect(realms[0].username).toBe('yuwenxuan');
+    // Rewriting the same realm overwrites (rotated password wins)
+    writeSvnSimpleCredential(home, realm, 'yuwenxuan', 'new');
+    expect(readSvnSimpleRealms(home)).toHaveLength(1);
+  });
+
+  it('round-trips a non-ASCII realm without truncation (byte-length headers)', () => {
+    const home = join(dir, 'home');
+    prepareOcrHomeSvnConfig(home);
+    // Realm with multi-byte chars: svn writes BYTE lengths in the V header;
+    // the reader must slice by bytes or the realm is truncated.
+    const realm = '<https://svn.内部网.example:443> 代码评审';
+    writeSvnSimpleCredential(home, realm, '用户甲', '密码密码');
+    const realms = readSvnSimpleRealms(home);
+    expect(realms).toHaveLength(1);
+    expect(realms[0].realm).toBe(realm);
+    expect(realms[0].username).toBe('用户甲');
+  });
+
+  it('skips corrupt svn.simple entries when reading realms', () => {
+    const home = join(dir, 'home');
+    prepareOcrHomeSvnConfig(home);
+    writeSvnSimpleCredential(home, '<https://x> R', 'u', 'p');
+    // A garbage file without a realm block is skipped, not fatal.
+    const bad = join(ocrHomeSvnDir(home), 'auth', 'svn.simple', 'garbage');
+    writeFileSync(bad, 'not a credential file', 'utf8');
+    const realms = readSvnSimpleRealms(home);
+    expect(realms).toHaveLength(1);
+    expect(realms[0].realm).toBe('<https://x> R');
+  });
 });
