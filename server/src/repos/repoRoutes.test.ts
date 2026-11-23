@@ -39,7 +39,7 @@ describe('repo API integration', () => {
     const body = res.json();
     expect(body.type).toBe('git');
     expect(body.hasCredential).toBe(false);
-    expect(body).toMatchObject({ reviewConcurrency: 2, providerId: null });
+    expect(body).toMatchObject({ reviewConcurrency: 2, providerIds: [] });
     // password must never appear
     expect(JSON.stringify(body)).not.toContain('password');
   });
@@ -54,19 +54,19 @@ describe('repo API integration', () => {
     try {
       const repo = { type: 'git', url: GIT_REPO_DIR(), name: 'repo' };
       const created = await app.inject({
-        method: 'POST', url: '/api/repos', payload: { ...repo, reviewConcurrency: 3, providerId },
+        method: 'POST', url: '/api/repos', payload: { ...repo, reviewConcurrency: 3, providerIds: [providerId] },
       });
       expect(created.statusCode).toBe(201);
-      expect(created.json()).toMatchObject({ reviewConcurrency: 3, providerId });
+      expect(created.json()).toMatchObject({ reviewConcurrency: 3, providerIds: [providerId] });
       const url = `/api/repos/${created.json().id}`;
       const update = (payload: object) => app.inject({ method: 'PUT', url, payload: { ...repo, ...payload } });
-      expect((await update({ enabled: false })).json()).toMatchObject({ reviewConcurrency: 3, providerId });
+      expect((await update({ enabled: false })).json()).toMatchObject({ reviewConcurrency: 3, providerIds: [providerId] });
       for (const invalid of [0, 1.5, '2', Number.MAX_SAFE_INTEGER + 1, null]) {
         expect((await update({ reviewConcurrency: invalid })).statusCode).toBe(400);
       }
-      expect((await update({ providerId: providerId + 1 })).statusCode).toBe(400);
-      expect((await update({ reviewConcurrency: 1, providerId: null })).json())
-        .toMatchObject({ reviewConcurrency: 1, providerId: null });
+      expect((await update({ providerIds: [providerId + 1] })).statusCode).toBe(400);
+      expect((await update({ reviewConcurrency: 1, providerIds: [] })).json())
+        .toMatchObject({ reviewConcurrency: 1, providerIds: [] });
     } finally {
       await app.close();
     }
@@ -201,6 +201,57 @@ describe('repo API integration', () => {
     // repo gone
     const list = await app.inject({ method: 'GET', url: '/api/repos' });
     expect(list.json()).toHaveLength(0);
+  });
+
+  it('stores an ordered model pool; omitted keeps it, empty clears it', async () => {
+    execFileSync('git', ['init', '-b', 'main', GIT_REPO_DIR()]);
+    const first = Number(db.prepare(
+      "INSERT INTO provider (name, api_base, model) VALUES ('p1', 'http://localhost:1/v1', 'm1')"
+    ).run().lastInsertRowid);
+    const second = Number(db.prepare(
+      "INSERT INTO provider (name, api_base, model) VALUES ('p2', 'http://localhost:1/v1', 'm2')"
+    ).run().lastInsertRowid);
+    const app = await buildTestApp(db, credentials);
+    const repo = { type: 'git', url: GIT_REPO_DIR(), name: 'pooled' };
+
+    const created = await app.inject({
+      method: 'POST', url: '/api/repos', payload: { ...repo, providerIds: [second, first] },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({
+      providerIds: [second, first],
+      providerLabels: ['p2 · m2', 'p1 · m1'],
+    });
+
+    const url = `/api/repos/${created.json().id}`;
+    // Explicit empty list clears the pool -> inherit global.
+    const cleared = await app.inject({
+      method: 'PUT', url, payload: { ...repo, providerIds: [] },
+    });
+    expect(cleared.json()).toMatchObject({ providerIds: [] });
+
+    const set = await app.inject({
+      method: 'PUT', url, payload: { ...repo, providerIds: [first] },
+    });
+    expect(set.json()).toMatchObject({ providerIds: [first] });
+
+    // Omitting the field keeps the stored pool (e.g. enable/disable toggle).
+    const toggled = await app.inject({
+      method: 'PUT', url, payload: { ...repo, enabled: false },
+    });
+    expect(toggled.json()).toMatchObject({ providerIds: [first], enabled: false });
+
+    // Unknown member rejected.
+    const bad = await app.inject({
+      method: 'PUT', url, payload: { ...repo, providerIds: [first, first + 999] },
+    });
+    expect(bad.statusCode).toBe(400);
+
+    // Deleting a provider empties it out of the pool.
+    db.prepare('DELETE FROM provider WHERE id = ?').run(first);
+    const after = await app.inject({ method: 'GET', url });
+    expect(after.json()).toMatchObject({ providerIds: [] });
+    expect(second).toBeGreaterThan(0);
   });
 
   it('rejects duplicate repo name', async () => {

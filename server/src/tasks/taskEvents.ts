@@ -84,6 +84,7 @@ export class TaskEventHub extends EventEmitter {
     void runDistillation(this.db, this.credentials, this.memory, {
       repoId: event.task.repoId,
       taskId: event.task.id,
+      providerId: event.task.providerId,
       changedFiles: [],
       issueSummaries: this.issueSummaries(event.task.id),
     }).catch(() => {});

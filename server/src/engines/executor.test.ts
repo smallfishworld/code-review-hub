@@ -16,6 +16,7 @@ import { OcrRunner, workCopyDir } from '../tasks/ocrRunner.js';
 import { bootstrapEngines } from './registry.js';
 import { EngineExecutor } from './executor.js';
 import { OcrEngine, ocrHomeDir } from './ocrEngine.js';
+import { setRepoProviderPool } from '../providers/pool.js';
 import type { ReviewRequest } from './types.js';
 
 let dir: string;
@@ -202,9 +203,10 @@ describe('parallel review workspaces', () => {
     addProvider('global', 'global-model');
     const providerId = addProvider('repository', 'repository-model');
     const repoId = Number(db.prepare(
-      `INSERT INTO repo (type, name, url, branch, source_version, provider_id)
-       VALUES (?, 'parallel-fixture', ?, 'main', ?, ?)`
-    ).run(type, url, sourceVersion, providerId).lastInsertRowid);
+      `INSERT INTO repo (type, name, url, branch, source_version)
+       VALUES (?, 'parallel-fixture', ?, 'main', ?)`
+    ).run(type, url, sourceVersion).lastInsertRowid);
+    setRepoProviderPool(db, repoId, [Number(providerId)]);
     const auth = { type, url, branch: 'main' };
     const tasks: TaskRecord[] = [first, second].map((node, workspaceSlot) => ({
       id: workspaceSlot + 1, repoId, sourceVersion, workspaceSlot, node,

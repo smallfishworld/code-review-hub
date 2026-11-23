@@ -193,6 +193,7 @@ export function TasksPage() {
                     <th scope="col">节点</th>
                     <th scope="col">作者</th>
                     <th scope="col">触发</th>
+                    <th scope="col">模型</th>
                     <th scope="col">状态</th>
                     <th scope="col">创建时间</th>
                   </tr>
@@ -207,6 +208,7 @@ export function TasksPage() {
                       <td className="mono">{task.node}</td>
                       <td>{task.author ?? '—'}</td>
                       <td>{task.trigger === 'auto' ? '自动监控' : '手动'}</td>
+                      <td className="nowrap small">{task.providerLabel ?? '默认模型'}</td>
                       <td>
                         <span className={`tag ${task.status}`}>{STATUS_LABEL[task.status]}</span>
                       </td>
@@ -341,6 +343,10 @@ export function TaskDetailPage() {
             <div className="stat">
               <span className="stat-label">触发方式</span>
               <span className="stat-value">{t.trigger === 'auto' ? '自动监控' : '手动'}</span>
+            </div>
+            <div className="stat">
+              <span className="stat-label">评审模型</span>
+              <span className="stat-value small">{t.providerLabel ?? '默认模型'}</span>
             </div>
             <div className="stat">
               <span className="stat-label">评审引擎</span>

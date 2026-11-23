@@ -9,7 +9,7 @@ import { processFeedback, FeedbackError, type FeedbackInput } from './feedback.j
 import { callLlm } from './distill.js';
 import { injectionAuditForTask } from '../mcp/injector.js';
 import { workCopyDir } from '../tasks/ocrRunner.js';
-import { resolveProvider } from '../providers/ocrProviderConfig.js';
+import { resolveRepositoryProvider, resolveProvider } from '../providers/ocrProviderConfig.js';
 import type { CredentialService } from '../crypto/credentialService.js';
 
 /**
@@ -146,7 +146,10 @@ export function buildMemoryRoutes(
       }
       try {
         const summary = scanWorkCopy(wcDir);
-        const provider = resolveProvider(db, credentials);
+        // Prefer the repo's model (pool primary / legacy override); otherwise the
+        // global default — a repo bound to a model should generate its memory
+        // profile with that same model.
+        const provider = resolveRepositoryProvider(db, credentials, repoId) ?? resolveProvider(db, credentials);
         if (!provider || !provider.apiKey) {
           return reply.code(409).send({ message: '未配置 LLM Provider（需要 API Key 才能生成画像）' });
         }

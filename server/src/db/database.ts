@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 export type RepoType = 'svn' | 'git';
 
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 12;
 
 /**
  * Ordered, append-only list of migrations. Each entry runs once, tracked in
@@ -335,7 +335,34 @@ const MIGRATIONS: { version: number; name: string; up: (db: Database.Database) =
       db.exec(`
         ALTER TABLE repo ADD COLUMN review_concurrency INTEGER NOT NULL DEFAULT 2
           CHECK (review_concurrency >= 1 AND typeof(review_concurrency) = 'integer');
-        ALTER TABLE repo ADD COLUMN provider_id INTEGER REFERENCES provider(id) ON DELETE SET NULL;
+      `);
+    },
+  },
+  {
+    version: 12,
+    name: 'repo-provider-pool',
+    up: (db) => {
+      // A repo binds a POOL of LLM providers (concurrent reviews spread
+      // across models). Position preserves the operator's ordering; the first
+      // member is the primary/preferred model.
+      db.exec(`
+        CREATE TABLE repo_provider (
+          repo_id INTEGER NOT NULL REFERENCES repo(id) ON DELETE CASCADE,
+          provider_id INTEGER NOT NULL REFERENCES provider(id) ON DELETE CASCADE,
+          position INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (repo_id, provider_id)
+        );
+        CREATE INDEX idx_repo_provider_repo ON repo_provider(repo_id, position);
+      `);
+      // (No legacy single-provider column exists: pre-release, the pool in
+      // repo_provider is the only repo-level model binding.)
+      // Each task records the model it actually ran with, so the assignment
+      // survives restarts/retries and reports show which model produced them.
+      // provider_label snapshots "name · model" at enqueue time: providers can
+      // be renamed or deleted afterwards, and history must stay readable.
+      db.exec(`
+        ALTER TABLE task ADD COLUMN provider_id INTEGER REFERENCES provider(id) ON DELETE SET NULL;
+        ALTER TABLE task ADD COLUMN provider_label TEXT;
       `);
     },
   },

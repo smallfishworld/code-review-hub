@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 import type { CredentialService } from '../crypto/credentialService.js';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { repoProviderPool } from './pool.js';
 
 /**
  * Bridges the platform's Provider configuration into the `ocr` CLI.
@@ -102,14 +103,39 @@ export function resolveProvider(
   };
 }
 
-/** Resolve the repository's model, or inherit the global Provider. */
+/** Resolve the repository's default model, or inherit the global Provider. */
 export function resolveRepositoryProvider(
   db: Database.Database, credentials: CredentialService, repoId: number
 ): OcrProviderSettings | null {
-  const repo = db.prepare('SELECT provider_id FROM repo WHERE id = ?').get(repoId) as
-    | { provider_id: number | null }
-    | undefined;
-  return resolveProvider(db, credentials, repo?.provider_id ?? undefined);
+  const primary = repoProviderPool(db, repoId)[0];
+  if (primary) {
+    const fromPool = resolveProvider(db, credentials, primary.providerId);
+    if (fromPool) return fromPool;
+  }
+  return resolveProvider(db, credentials);
+}
+
+/**
+ * Resolve the provider a task actually runs with, in priority order:
+ *
+ * 1. `task.provider_id` — assigned from the repo's pool at enqueue time by
+ *    the queue (load-balanced across concurrent reviews of one repo);
+ * 2. the repo pool's primary member — for tasks queued before the pool was
+ *    configured (provider_id NULL) on a repo that has one;
+ * 3. the global default provider.
+ *
+ * A deleted provider drops out of steps 1-2 (resolveProvider returns null for
+ * an unknown id) and the call falls through to the next step, so deleting a
+ * model degrades rather than fails.
+ */
+export function resolveTaskProvider(
+  db: Database.Database, credentials: CredentialService, task: { providerId?: number; repoId: number }
+): OcrProviderSettings | null {
+  if (task.providerId !== undefined) {
+    const bound = resolveProvider(db, credentials, task.providerId);
+    if (bound) return bound;
+  }
+  return resolveRepositoryProvider(db, credentials, task.repoId);
 }
 
 /**

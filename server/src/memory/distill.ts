@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 import type { CredentialService } from '../crypto/credentialService.js';
-import { resolveRepositoryProvider } from '../providers/ocrProviderConfig.js';
+import { resolveTaskProvider } from '../providers/ocrProviderConfig.js';
 import { MemoryStore, type MemoryEntry, type MemoryKind } from './store.js';
 
 /**
@@ -22,6 +22,8 @@ export interface DistillCandidate {
 export interface DistillContext {
   repoId: number;
   taskId: number;
+  /** Model the reviewed task ran with (see resolveTaskProvider). */
+  providerId?: number;
   changedFiles: string[];
   /** Normalized issue descriptions from the report (top N). */
   issueSummaries: string[];
@@ -140,7 +142,10 @@ export async function runDistillation(
   ctx: DistillContext
 ): Promise<{ created: number; merged: number } | null> {
   try {
-    const provider = resolveRepositoryProvider(db, credentials, ctx.repoId);
+    // Reuse the model the reviewed task actually ran with (distillation reads
+    // the same issue text, so the reviewer's model keeps its own continuity);
+    // fall back to the repo pool/global default for legacy rows.
+    const provider = resolveTaskProvider(db, credentials, { providerId: ctx.providerId, repoId: ctx.repoId });
     if (!provider || !provider.apiKey) return null;
     const prompt = buildDistillPrompt(ctx);
     const text = await callLlm({

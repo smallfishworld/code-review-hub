@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CredentialService } from '../crypto/credentialService.js';
 import { workspaceKey } from './sourceVersion.js';
+import { repoProviderPool, setRepoProviderPool } from '../providers/pool.js';
 import { svnInfo, svnLogPage, SvnError } from '../vcs/svn.js';
 import {
   ensureGitClone,
@@ -45,7 +46,11 @@ export interface RepoInput {
   enabled?: boolean;
   engineId?: number | null;
   reviewConcurrency?: number;
-  providerId?: number | null;
+  /**
+   * Model pool for this repo's reviews (ordered; first = primary). Omitted =
+   * keep the stored pool on update; null or [] = clear it (inherit global).
+   */
+  providerIds?: number[] | null;
 }
 
 export type RepoInitStatus = 'pending' | 'preparing' | 'ready' | 'failed';
@@ -60,7 +65,9 @@ export interface RepoRecord {
   enabled: boolean;
   engineId: number | null;
   reviewConcurrency: number;
-  providerId: number | null;
+  /** Ordered model pool; empty = inherit the global default provider. */
+  providerIds: number[];
+  providerLabels: string[];
   hasCredential: boolean;
   /** Workspace prewarm state: pending/preparing = download in flight. */
   initStatus: RepoInitStatus;
@@ -119,7 +126,7 @@ export class RepoService {
     const dup = this.db.prepare('SELECT id FROM repo WHERE name = ?').get(input.name);
     if (dup) throw new RepoServiceError(`仓库 "${input.name}" 已存在`, 409);
     await this.verifyConnectivity(input);
-    this.validateProvider(input.providerId);
+    this.validateProviderPool(input);
 
     const credentialId = input.password
       ? this.credentials.store(`repo:${input.name}`, input.type, input.password)
@@ -129,9 +136,9 @@ export class RepoService {
       .prepare(
         `INSERT INTO repo (
            type, name, url, username, credential_id, branch, enabled, engine_id,
-           review_concurrency, provider_id, init_status
+           review_concurrency, init_status
          )
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`
       )
       .run(
         input.type,
@@ -142,10 +149,11 @@ export class RepoService {
         input.type === 'git' ? input.branch ?? 'main' : null,
         input.enabled === false ? 0 : 1,
         input.engineId ?? null,
-        input.reviewConcurrency ?? 2,
-        input.providerId ?? null
+        input.reviewConcurrency ?? 2
       );
-    return this.get(Number(info.lastInsertRowid));
+    const id = Number(info.lastInsertRowid);
+    setRepoProviderPool(this.db, id, this.effectivePool(input));
+    return this.get(id);
   }
 
   async update(id: number, input: RepoInput): Promise<RepoRecord> {
@@ -173,7 +181,7 @@ export class RepoService {
         | Record<string, unknown>
         | undefined;
       if (!current) throw new RepoServiceError('仓库不存在', 404);
-      this.validateProvider(input.providerId);
+      this.validateProviderPool(input);
       const branch = input.type === 'git' ? input.branch ?? 'main' : null;
       const changed = current.type !== input.type || current.url !== input.url || current.branch !== branch;
       const sourceVersion = (current.source_version as number) + Number(changed);
@@ -183,20 +191,24 @@ export class RepoService {
         else credentialId = this.credentials.store(`repo:${input.name}`, input.type, input.password);
       }
 
+      // undefined = keep the stored pool (e.g. an enable/disable toggle);
+      // null or [] = clear it; an explicit list replaces it wholesale.
+      const pool = input.providerIds === undefined ? undefined : this.effectivePool(input);
+
       this.db.prepare(
         `UPDATE repo
          SET type = ?, name = ?, url = ?, username = ?, credential_id = ?,
              branch = ?, enabled = ?, engine_id = ?, source_version = ?,
-             review_concurrency = ?, provider_id = ?,
+             review_concurrency = ?,
              updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
          WHERE id = ?`
       ).run(
         input.type, input.name, input.url, input.username ?? null, credentialId,
         branch, input.enabled === false ? 0 : 1,
         input.engineId === undefined ? current.engine_id : input.engineId, sourceVersion,
-        input.reviewConcurrency ?? current.review_concurrency,
-        input.providerId === undefined ? current.provider_id : input.providerId, id
+        input.reviewConcurrency ?? current.review_concurrency, id
       );
+      if (pool !== undefined) setRepoProviderPool(this.db, id, pool);
       if (changed) {
         this.db.prepare(
           "UPDATE repo SET init_status = 'pending', init_error = NULL, init_updated_at = NULL WHERE id = ?"
@@ -403,8 +415,10 @@ export class RepoService {
   }
 
   private toRecord(row: Record<string, unknown>): RepoRecord {
+    const repoId = row.id as number;
+    const pool = repoProviderPool(this.db, repoId);
     return {
-      id: row.id as number,
+      id: repoId,
       type: row.type as RepoType,
       name: row.name as string,
       url: row.url as string,
@@ -413,7 +427,8 @@ export class RepoService {
       enabled: Boolean(row.enabled),
       engineId: (row.engine_id as number | null) ?? null,
       reviewConcurrency: row.review_concurrency as number,
-      providerId: (row.provider_id as number | null) ?? null,
+      providerIds: pool.map((entry) => entry.providerId),
+      providerLabels: pool.map((entry) => entry.label),
       hasCredential: Boolean(row.credential_id),
       initStatus: (row.init_status as RepoInitStatus) ?? 'ready',
       initError: (row.init_error as string | null) ?? undefined,
@@ -427,7 +442,7 @@ export class RepoService {
         (!Number.isSafeInteger(input.reviewConcurrency) || input.reviewConcurrency < 1)) {
       throw new RepoServiceError('评审并发数量必须是正整数');
     }
-    this.validateProvider(input.providerId);
+    this.validateProviderPool(input);
     if (!['svn', 'git'].includes(input.type)) {
       throw new RepoServiceError('仓库类型必须为 svn 或 git');
     }
@@ -445,10 +460,25 @@ export class RepoService {
     }
   }
 
-  private validateProvider(id: number | null | undefined): void {
-    if (id != null && (!Number.isSafeInteger(id) || id < 1 ||
-        !this.db.prepare('SELECT 1 FROM provider WHERE id = ?').get(id))) {
-      throw new RepoServiceError('指定的评审模型服务不存在');
+  /**
+   * Normalize the requested pool: an explicit array (null/[] = clear) or —
+   * when the field is omitted on create — an empty pool. Deduped and every
+   * member validated against the provider table.
+   */
+  private effectivePool(input: RepoInput): number[] {
+    const raw = input.providerIds ?? [];
+    if (!Array.isArray(raw)) throw new RepoServiceError('评审模型列表格式不合法');
+    const ids = [...new Set(raw)];
+    for (const id of ids) {
+      if (!Number.isSafeInteger(id) || id < 1 ||
+          !this.db.prepare('SELECT 1 FROM provider WHERE id = ?').get(id)) {
+        throw new RepoServiceError('指定的评审模型服务不存在');
+      }
     }
+    return ids;
+  }
+
+  private validateProviderPool(input: RepoInput): void {
+    if (input.providerIds !== undefined) this.effectivePool(input);
   }
 }

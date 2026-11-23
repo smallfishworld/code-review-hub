@@ -81,7 +81,9 @@ export interface Repo {
   username?: string;
   branch?: string;
   reviewConcurrency: number;
-  providerId: number | null;
+  /** Ordered model pool; empty = inherit the global default provider. */
+  providerIds: number[];
+  providerLabels: string[];
   enabled: boolean;
   hasCredential: boolean;
   /** Workspace prewarm state: pending/preparing = download in flight. */
@@ -98,6 +100,8 @@ export interface Task {
   trigger: 'manual' | 'auto';
   status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
   author?: string;
+  /** Model bound at enqueue time ("name · model"); undefined for legacy rows. */
+  providerLabel?: string;
   error?: string;
   ocrExitCode?: number;
   startedAt?: string;

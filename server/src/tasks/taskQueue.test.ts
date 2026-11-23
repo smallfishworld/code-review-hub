@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDatabase } from '../db/database.js';
 import { TaskQueue, type TaskRecord, type TaskSpawnHandler } from './taskQueue.js';
+import { setRepoProviderPool } from '../providers/pool.js';
 import type Database from 'better-sqlite3';
 
 let dir: string;
@@ -193,6 +194,40 @@ describe('TaskQueue lifecycle', () => {
     await queue.idle();
     expect(execute).toHaveBeenCalledOnce();
     expect(queue.get(taskId)).toMatchObject({ status: 'failed', error: 'repo not found' });
+  });
+
+  it('binds a model from the repo pool at enqueue and spreads concurrent tasks', () => {
+    const repoId = seedRepo(db);
+    const a = Number(db.prepare(
+      "INSERT INTO provider (name, api_base, model) VALUES ('a', 'http://x/v1', 'm-a')"
+    ).run().lastInsertRowid);
+    const b = Number(db.prepare(
+      "INSERT INTO provider (name, api_base, model) VALUES ('b', 'http://x/v1', 'm-b')"
+    ).run().lastInsertRowid);
+    setRepoProviderPool(db, repoId, [a, b]);
+    q = new TaskQueue(db, gatedExecutor().executor, 4);
+    const t1 = q.enqueue(repoId, 'r1', 'manual');
+    const t2 = q.enqueue(repoId, 'r2', 'manual');
+    const t3 = q.enqueue(repoId, 'r3', 'manual');
+    // 3 tasks, 2 models: a gets 2, b gets 1 — and each binding is persisted.
+    expect([t1.providerId, t2.providerId, t3.providerId]).toEqual([a, b, a]);
+    expect(t1.providerLabel).toBe('a · m-a');
+    const rows = db.prepare('SELECT provider_id, provider_label FROM task ORDER BY id').all() as {
+      provider_id: number; provider_label: string;
+    }[];
+    expect(rows).toEqual([
+      { provider_id: a, provider_label: 'a · m-a' },
+      { provider_id: b, provider_label: 'b · m-b' },
+      { provider_id: a, provider_label: 'a · m-a' },
+    ]);
+  });
+
+  it('leaves provider unbound when the repo has no pool (inherit global default)', () => {
+    const repoId = seedRepo(db);
+    q = new TaskQueue(db, gatedExecutor().executor, 4);
+    const t = q.enqueue(repoId, 'r1', 'manual');
+    expect(t.providerId).toBeUndefined();
+    expect(t.providerLabel).toBeUndefined();
   });
 
   it('cancel kills a running task and marks it cancelled', async () => {

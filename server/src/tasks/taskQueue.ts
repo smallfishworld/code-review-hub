@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import type { LogService } from '../logs/logService.js';
 import { repoSourceVersion } from '../repos/sourceVersion.js';
 import { resolveEngineForRepo } from '../engines/resolver.js';
+import { pickProviderForTask } from '../providers/pool.js';
 import type { CompletedReviewReport, ReportService } from './reportService.js';
 
 export type TaskStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
@@ -20,6 +21,10 @@ export interface TaskRecord {
   monitorRuleId?: number;
   engineId?: number;
   engineSelectionError?: string;
+  /** LLM provider (model) this task was assigned at enqueue time. */
+  providerId?: number;
+  /** Snapshot of the provider's "name · model" at enqueue time. */
+  providerLabel?: string;
   author?: string;
   error?: string;
   ocrExitCode?: number;
@@ -58,6 +63,8 @@ function rowToTask(row: Record<string, unknown>): TaskRecord {
     monitorRuleId: (row.monitor_rule_id as number | null) ?? undefined,
     engineId: (row.engine_id as number | null) ?? undefined,
     engineSelectionError: (row.engine_selection_error as string | null) ?? undefined,
+    providerId: (row.provider_id as number | null) ?? undefined,
+    providerLabel: (row.provider_label as string | null) ?? undefined,
     author: (row.author as string | null) ?? undefined,
     error: (row.error as string | null) ?? undefined,
     ocrExitCode: (row.ocr_exit_code as number | null) ?? undefined,
@@ -158,12 +165,21 @@ export class TaskQueue extends EventEmitter {
     } catch (err) {
       engineSelectionError = err instanceof Error ? err.message : String(err);
     }
+    // Bind the model NOW (not at execution): concurrent reviews of this repo
+    // spread across the pool by current load, and the assignment is persisted
+    // so a restart/retry keeps the same model. No pool -> null -> the
+    // executor falls back to the global default provider.
+    const provider = pickProviderForTask(this.db, repoId);
     const info = this.db
       .prepare(
-        `INSERT INTO task (repo_id, source_version, node, trigger, status, author, monitor_rule_id, engine_id, engine_selection_error)
-         VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?)`
+        `INSERT INTO task (repo_id, source_version, node, trigger, status, author, monitor_rule_id, engine_id, engine_selection_error, provider_id, provider_label)
+         VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)`
       )
-      .run(repoId, sourceVersion, node, trigger, author ?? null, monitorRuleId ?? null, engineId, engineSelectionError);
+      .run(
+        repoId, sourceVersion, node, trigger, author ?? null, monitorRuleId ?? null,
+        engineId, engineSelectionError,
+        provider?.providerId ?? null, provider?.label ?? null
+      );
     const record = this.get(Number(info.lastInsertRowid));
     this.kick();
     return record;

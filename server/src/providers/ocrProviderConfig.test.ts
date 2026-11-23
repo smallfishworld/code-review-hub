@@ -10,8 +10,10 @@ import {
   prepareOcrHome,
   resolveProvider,
   resolveRepositoryProvider,
+  resolveTaskProvider,
   defaultProviderId,
 } from './ocrProviderConfig.js';
+import { setRepoProviderPool } from './pool.js';
 import type Database from 'better-sqlite3';
 
 let dir: string;
@@ -117,22 +119,53 @@ describe('ocr provider config bridge', () => {
     expect(written.custom_providers.gw.api_key).toBe('secret');
   });
 
-  it('uses the repository model override and inherits when the override is cleared or deleted', () => {
+  it('uses the repository model pool and inherits the global default when the pool is cleared', () => {
     const global = addProvider('shared', { model: 'general' });
     const specific = addProvider('specific', { model: 'review' });
     db.prepare("INSERT INTO setting (key, value) VALUES ('default_provider_id', ?)").run(String(global));
     const id = Number(db.prepare(
-      "INSERT INTO repo (type, url, name, provider_id) VALUES ('svn', 'file:///repo', 'repo', ?)"
-    ).run(specific).lastInsertRowid);
+      "INSERT INTO repo (type, url, name) VALUES ('svn', 'file:///repo', 'repo')"
+    ).run().lastInsertRowid);
+    setRepoProviderPool(db, id, [specific]);
     expect(resolveRepositoryProvider(db, credentials, id)).toMatchObject({ name: 'specific', model: 'review' });
-    db.prepare('UPDATE repo SET provider_id = NULL WHERE id = ?').run(id);
+    setRepoProviderPool(db, id, []);
     expect(resolveRepositoryProvider(db, credentials, id)).toMatchObject({ name: 'shared', model: 'general' });
-    db.prepare('UPDATE repo SET provider_id = ? WHERE id = ?').run(specific, id);
+    setRepoProviderPool(db, id, [specific]);
     db.prepare('DELETE FROM provider WHERE id = ?').run(specific);
     expect(resolveRepositoryProvider(db, credentials, id)).toMatchObject({ name: 'shared', model: 'general' });
+  });
+
+  it('resolves a task-bound provider from the repo pool, falling back down the chain', () => {
+    const global = addProvider('shared', { model: 'general' });
+    const primary = addProvider('primary', { model: 'm-primary' });
+    const secondary = addProvider('secondary', { model: 'm-secondary' });
+    db.prepare("INSERT INTO setting (key, value) VALUES ('default_provider_id', ?)").run(String(global));
+    const repoId = Number(
+      db.prepare("INSERT INTO repo (type, url, name) VALUES ('svn', 'file:///repo', 'repo')")
+        .run().lastInsertRowid
+    );
+    setRepoProviderPool(db, repoId, [primary, secondary]);
+
+    // Task was bound to the secondary model at enqueue time.
+    expect(resolveTaskProvider(db, credentials, { repoId, providerId: secondary }))
+      .toMatchObject({ name: 'secondary', model: 'm-secondary' });
+    // A legacy task (no binding) inherits the pool's primary, not the global.
+    expect(resolveTaskProvider(db, credentials, { repoId }))
+      .toMatchObject({ name: 'primary', model: 'm-primary' });
+    // Deleting the task's provider degrades to the pool primary.
+    db.prepare('DELETE FROM provider WHERE id = ?').run(secondary);
+    expect(resolveTaskProvider(db, credentials, { repoId, providerId: secondary }))
+      .toMatchObject({ name: 'primary', model: 'm-primary' });
+    // Emptying the pool falls back to the global default.
+    setRepoProviderPool(db, repoId, []);
+    expect(resolveRepositoryProvider(db, credentials, repoId))
+      .toMatchObject({ name: 'shared', model: 'general' });
+    expect(resolveTaskProvider(db, credentials, { repoId }))
+      .toMatchObject({ name: 'shared', model: 'general' });
   });
 
   it('returns null when no provider is configured', () => {
     expect(prepareOcrHome(join(dir, 'data'), null)).toBeNull();
   });
+
 });

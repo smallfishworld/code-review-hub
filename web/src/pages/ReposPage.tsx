@@ -13,7 +13,8 @@ interface FormState {
   password: string;
   branch: string;
   reviewConcurrency: string;
-  providerId: number | null;
+  /** Ordered model pool; empty = inherit the global default. */
+  providerIds: number[];
   enabled: boolean;
 }
 
@@ -27,7 +28,7 @@ const emptyForm: FormState = {
   password: '',
   branch: 'main',
   reviewConcurrency: String(DEFAULT_REVIEW_CONCURRENCY),
-  providerId: null,
+  providerIds: [],
   enabled: true,
 };
 
@@ -64,12 +65,19 @@ export function ReposPage() {
     reviewConcurrency: useId(),
     reviewConcurrencyHint: useId(),
     provider: useId(),
+    providerHint: useId(),
     enabled: useId(),
     hint: useId(),
     error: useId(),
   };
   const defaultProvider = providers.data?.find((provider) => provider.isDefault) ?? providers.data?.[0];
-  const selectedProviderUnavailable = !providers.data?.some((provider) => provider.id === form.providerId);
+  // Pool members whose provider row disappeared (deleted meanwhile) are kept
+  // visible so the operator can see and remove them. While the list is still
+  // loading everything would look "missing", so wait for it.
+  const unavailableProviderIds =
+    providers.data === null
+      ? []
+      : form.providerIds.filter((id) => !providers.data!.some((provider) => provider.id === id));
 
   const startCreate = () => {
     setEditingId(null);
@@ -87,7 +95,7 @@ export function ReposPage() {
       password: '',
       branch: repo.branch ?? 'main',
       reviewConcurrency: String(repo.reviewConcurrency ?? DEFAULT_REVIEW_CONCURRENCY),
-      providerId: repo.providerId ?? null,
+      providerIds: repo.providerIds ?? [],
       enabled: repo.enabled,
     });
     setFormError(null);
@@ -105,7 +113,7 @@ export function ReposPage() {
       password: form.password || undefined,
       branch: form.type === 'git' ? form.branch.trim() || 'main' : undefined,
       reviewConcurrency: Number(form.reviewConcurrency),
-      providerId: form.providerId,
+      providerIds: form.providerIds,
       enabled: form.enabled,
     };
     try {
@@ -274,28 +282,53 @@ export function ReposPage() {
             <p className="muted small" id={ids.reviewConcurrencyHint}>
               同一仓库同时运行的评审任务数。设为 1 时串行，实际并发还受实例上限约束。
             </p>
-            <label htmlFor={ids.provider}>
-              评审模型
-              <select
-                id={ids.provider}
-                name="providerId"
-                value={form.providerId ?? ''}
-                disabled={providers.loading || providers.data === null}
-                onChange={(e) => setForm({ ...form, providerId: e.target.value ? Number(e.target.value) : null })}
-              >
-                <option value="">
-                  继承全局默认{defaultProvider ? `（${defaultProvider.name} · ${defaultProvider.model}）` : ''}
-                </option>
-                {form.providerId !== null && selectedProviderUnavailable && (
-                  <option value={form.providerId}>已选模型（当前不可用）</option>
-                )}
-                {providers.data?.map((provider) => (
-                  <option key={provider.id} value={provider.id}>
-                    {provider.name} · {provider.model}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <fieldset className="provider-pool" aria-describedby={ids.providerHint}>
+              <legend>评审模型（可多选）</legend>
+              <p className="muted small" id={ids.providerHint}>
+                并发评审时按当前负载在所选模型间分配；列表第一项为首选模型。
+                不选则继承全局默认{defaultProvider ? `（${defaultProvider.name} · ${defaultProvider.model}）` : ''}。
+              </p>
+              {providers.data?.map((provider) => {
+                const order = form.providerIds.indexOf(provider.id);
+                const checked = order >= 0;
+                return (
+                  <div key={provider.id} className="provider-pool-row">
+                    <label className="checkbox" htmlFor={`${ids.provider}-${provider.id}`}>
+                      <input
+                        id={`${ids.provider}-${provider.id}`}
+                        type="checkbox"
+                        checked={checked}
+                        disabled={providers.loading}
+                        onChange={(e) =>
+                          setForm({
+                            ...form,
+                            providerIds: e.target.checked
+                              ? [...form.providerIds, provider.id]
+                              : form.providerIds.filter((id) => id !== provider.id),
+                          })
+                        }
+                      />
+                      {provider.name} · {provider.model}
+                      {order === 0 && <span className="tag">首选</span>}
+                    </label>
+                  </div>
+                );
+              })}
+              {unavailableProviderIds.map((id) => (
+                <div key={id} className="provider-pool-row">
+                  <label className="checkbox">
+                    <input
+                      type="checkbox"
+                      checked
+                      onChange={() =>
+                        setForm({ ...form, providerIds: form.providerIds.filter((x) => x !== id) })
+                      }
+                    />
+                    Provider #{id}（已删除）
+                  </label>
+                </div>
+              ))}
+            </fieldset>
             {providers.loading && <p className="muted small" role="status">正在加载模型列表…</p>}
             {providers.error && (
               <p className="muted small" role="alert">

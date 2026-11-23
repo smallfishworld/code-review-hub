@@ -10,7 +10,7 @@ import { runGit, ensureGitClone, gitFetchBranch, gitPrepareCommit, gitRemote, gi
 import {
   buildOcrConfig,
   prepareOcrHomeSvnConfig,
-  resolveRepositoryProvider,
+  resolveTaskProvider,
   type OcrConfigFile,
   type OcrProviderSettings,
 } from '../providers/ocrProviderConfig.js';
@@ -272,7 +272,7 @@ export class OcrEngine implements ReviewEngine {
     const { repoId, sourceVersion, workspaceSlot } = ctx.task;
     const wcDir = workCopyDir(this.opts.dataDir, repoId, sourceVersion, workspaceSlot);
     ctx.signal?.throwIfAborted();
-    const provider = resolveRepositoryProvider(this.db, this.credentials, repoId);
+    const provider = resolveTaskProvider(this.db, this.credentials, ctx.task);
     const args = [
       'review',
       '--repo',
@@ -395,3 +395,4 @@ export function sampleIdentifiers(files: string[], addedLines: string[]): string
   }
   return [...out].slice(0, 200);
 }
+
