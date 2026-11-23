@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -201,6 +201,55 @@ describe('repo API integration', () => {
     // repo gone
     const list = await app.inject({ method: 'GET', url: '/api/repos' });
     expect(list.json()).toHaveLength(0);
+  });
+
+  it('delete sweeps the repo-scoped directories and cancels its active tasks', async () => {
+    execFileSync('git', ['init', '-b', 'main', GIT_REPO_DIR()]);
+    const dataDir = join(dir, 'data');
+    const cancelled: number[] = [];
+    const app = await buildTestApp(db, credentials, {
+      dataDir,
+      cancelRepoTasks: (repoId) => cancelled.push(repoId),
+    });
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/repos',
+      payload: { type: 'git', name: 'r1', url: GIT_REPO_DIR() },
+    });
+    const id = created.json().id;
+    // Plant repo-scoped dirs the way the runner would create them, including
+    // source-version/slot variants and another repo's dir that must survive.
+    const wcBase = join(dataDir, 'workcopies');
+    const homeBase = join(dataDir, 'ocr-home');
+    const memoryBase = join(dataDir, 'memory');
+    const graphBase = join(dataDir, 'codegraph');
+    mkdirSync(graphBase, { recursive: true });
+    for (const variant of [String(id), `${id}-v2`, `${id}-v2-slot-1`]) {
+      mkdirSync(join(wcBase, variant), { recursive: true });
+      mkdirSync(join(homeBase, variant), { recursive: true });
+      mkdirSync(join(memoryBase, variant), { recursive: true });
+      writeFileSync(join(graphBase, variant), '.codegraph-crh-0000', 'utf8');
+    }
+    mkdirSync(join(wcBase, '999'), { recursive: true });
+    mkdirSync(join(homeBase, '999'), { recursive: true });
+    mkdirSync(join(memoryBase, '999'), { recursive: true });
+    writeFileSync(join(graphBase, '999'), '.codegraph-crh-0000', 'utf8');
+
+    const del = await app.inject({ method: 'DELETE', url: `/api/repos/${id}` });
+    expect(del.statusCode).toBe(204);
+    expect(cancelled).toEqual([id]);
+    // every variant of this repo is gone…
+    for (const variant of [String(id), `${id}-v2`, `${id}-v2-slot-1`]) {
+      expect(existsSync(join(wcBase, variant))).toBe(false);
+      expect(existsSync(join(homeBase, variant))).toBe(false);
+      expect(existsSync(join(memoryBase, variant))).toBe(false);
+      expect(existsSync(join(graphBase, variant))).toBe(false);
+    }
+    // …but other repos' dirs are untouched
+    expect(existsSync(join(wcBase, '999'))).toBe(true);
+    expect(existsSync(join(homeBase, '999'))).toBe(true);
+    expect(existsSync(join(memoryBase, '999'))).toBe(true);
+    expect(existsSync(join(graphBase, '999'))).toBe(true);
   });
 
   it('stores an ordered model pool; omitted keeps it, empty clears it', async () => {

@@ -112,6 +112,10 @@ async function main() {
       monitor.syncRepo(repoId);
       queue.kick();
     },
+    cancelRepoTasks: (repoId) => {
+      const n = queue.cancelByRepo(repoId);
+      if (n > 0) logs.info('task', `仓库 #${repoId} 已删除，取消其 ${n} 个未完成任务`);
+    },
     dataDir,
     workspaceInit,
   }).register(app);

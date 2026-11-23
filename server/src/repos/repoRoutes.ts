@@ -16,6 +16,12 @@ export interface RepoRouteOptions {
    * start/stop polling).
    */
   onRepoChange?: (repoId: number) => void;
+  /**
+   * Cancels every queued/running task of a repo. Called before the repo row
+   * is deleted so running ocr children release their workspace/ocr-home dirs
+   * before those are swept off disk.
+   */
+  cancelRepoTasks?: (repoId: number) => void;
   /** Data directory; the node picker keeps its git clone cache under it. */
   dataDir?: string;
   /**
@@ -131,6 +137,10 @@ export function buildRepoRoutes(
     app.delete('/api/repos/:id', async (req, reply) => {
       const { id } = req.params as { id: string };
       try {
+        // Kill this repo's queued/running reviews first: their ocr children
+        // hold locks on the workcopy/ocr-home dirs deleted below (EPERM on
+        // Windows), and a task that outlives its repo would fail anyway.
+        options.cancelRepoTasks?.(Number(id));
         service.delete(Number(id));
         options.onRepoChange?.(Number(id));
         return reply.code(204).send();

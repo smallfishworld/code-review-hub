@@ -196,6 +196,33 @@ describe('TaskQueue lifecycle', () => {
     expect(queue.get(taskId)).toMatchObject({ status: 'failed', error: 'repo not found' });
   });
 
+  it('cancelByRepo cancels queued and running tasks of that repo only', async () => {
+    const gate = gatedExecutor();
+    const queue = q = new TaskQueue(db, gate.executor, 4);
+    const repoA = seedRepo(db, 'a');
+    const repoB = seedRepo(db, 'b');
+    const a1 = queue.enqueue(repoA, 'r1', 'manual');
+    const a2 = queue.enqueue(repoA, 'r2', 'auto');
+    const b1 = queue.enqueue(repoB, 'r3', 'manual');
+    // repo A allows 2 concurrent reviews, so a1+a2 run; b1 runs too.
+    await vi.waitFor(() => expect(gate.started).toHaveLength(3));
+
+    const n = queue.cancelByRepo(repoA);
+    expect(n).toBe(2);
+    // both were running: they stay "running" until their executors exit
+    expect(gate.active.get(a1.id)?.signal.aborted).toBe(true);
+    expect(gate.active.get(a2.id)?.signal.aborted).toBe(true);
+    expect(gate.active.get(b1.id)?.signal.aborted).toBe(false);
+
+    gate.release(a1);
+    gate.release(a2);
+    await vi.waitFor(() => expect(queue.get(a1.id).status).toBe('cancelled'));
+    expect(queue.get(a2.id).status).toBe('cancelled');
+    gate.release(b1);
+    await queue.idle();
+    expect(queue.get(b1.id).status).toBe('succeeded');
+  });
+
   it('binds a model from the repo pool at enqueue and spreads concurrent tasks', () => {
     const repoId = seedRepo(db);
     const a = Number(db.prepare(

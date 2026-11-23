@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import { rmSync } from 'node:fs';
+import { readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CredentialService } from '../crypto/credentialService.js';
@@ -257,6 +257,41 @@ export class RepoService {
       rmSync(this.nodesCacheDir(id, existing.source_version), { recursive: true, force: true });
     } catch {
       // ignore: cache removal is best-effort
+    }
+    // Same for the runner's work copies, per-repo ocr HOME dirs, the memory
+    // markdown projection and the CodeGraph slot markers: every
+    // source-version/slot variant lives under a `repoId*` prefix key, so sweep
+    // all of them. Best-effort for the same Windows lock reasons; a running
+    // review's cancel happens before this (see the DELETE route) but its ocr
+    // child may take a moment to exit.
+    try {
+      this.rmRepoScoped('workcopies', id);
+      this.rmRepoScoped('ocr-home', id);
+      this.rmRepoScoped('memory', id);
+      this.rmRepoScoped('codegraph', id);
+    } catch {
+      // ignore: best-effort
+    }
+  }
+
+  /** Remove every `prefix/<repoId…>` directory under dataDir (all variants). */
+  private rmRepoScoped(prefix: string, repoId: number): void {
+    if (!this.dataDir) return;
+    const dir = join(this.dataDir, prefix);
+    let entries: string[];
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      return; // absent dir: nothing to clean
+    }
+    for (const name of entries) {
+      if (name === String(repoId) || name.startsWith(`${repoId}-`)) {
+        try {
+          rmSync(join(dir, name), { recursive: true, force: true });
+        } catch {
+          // ignore: best-effort
+        }
+      }
     }
   }
 

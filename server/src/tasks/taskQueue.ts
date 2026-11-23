@@ -227,6 +227,22 @@ export class TaskQueue extends EventEmitter {
     return false;
   }
 
+  /**
+   * Cancel every queued/running task of a repository (used when the repo is
+   * deleted). Queued tasks flip to cancelled directly; running tasks get the
+   * same abort+kill treatment as a user cancel. Returns how many were active.
+   */
+  cancelByRepo(repoId: number): number {
+    const active = this.db
+      .prepare(`SELECT id, status FROM task WHERE repo_id = ? AND status IN ('queued','running')`)
+      .all(repoId) as { id: number; status: TaskStatus }[];
+    let n = 0;
+    for (const t of active) {
+      if (this.cancel(t.id)) n++;
+    }
+    return n;
+  }
+
   get(taskId: number): TaskRecord {
     const row = this.db.prepare('SELECT * FROM task WHERE id = ?').get(taskId) as Record<string, unknown> | undefined;
     if (!row) throw new Error('task not found');
