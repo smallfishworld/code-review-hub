@@ -32,6 +32,7 @@ ocr --version    # 期望输出 open-code-review v1.13.8-svn.1 ...
 `ocr` 自身需要 LLM 配置，两种方式任选其一：
 
 1. **推荐**：在平台 Web 控制台「LLM Provider」页配置 API 地址 / 模型 / Key 并设为默认。可在仓库设置中为仓库指定一个 Provider。每个评审执行槽使用独立的 ocr HOME 和模型配置。
+   - `ocr` 要求 Provider 必须带 API Key（本地免鉴权服务如 Ollama / llama-server 也一样）：未配置 Key 时评审会在启动时直接失败（可在「LLM Provider」页用「测试」提前发现）。这类服务请在 Key 中填任意占位值（服务端不校验鉴权），不要留空。
 2. 不配置 Provider 时，`ocr` 回退到运行账号自己的 `~/.opencodereview/config.json`。
 
 ### 安装 SVN（Windows）
@@ -230,7 +231,7 @@ data/
 - **手动单节点**：SVN 输入 revision 号（必须存在），Git 输入完整或短 commit sha（短 sha 需唯一）。
 - **手动区间**：SVN 输入 `from`/`to` revision（`to` 超出 HEAD 会自动截断到 HEAD），Git 输入起止 commit；区间内**逐节点**创建独立评审任务（旧 → 新）。已评审过的节点默认跳过，可带 `force` 重新评审。
 - **自动监控**：首次启用时以当前 HEAD 为起点（可用「回溯 N 节点」补评最近 N 个）；之后按间隔增量轮询。人员白名单与路径前缀**同时配置时为 AND 语义**；未命中的节点写入"跳过"日志并记录原因；已评审节点不重复建任务。处理位置持久化，服务重启后从上次位置继续。
-- **执行并发**：同一仓库串行（保护工作副本/克隆），不同仓库并行（默认 2 个）。
+- **执行并发**：同一仓库默认可并行 **2 条**评审（仓库设置中可调，设为 1 即串行），不同仓库并行，实例总上限默认 4（`REVIEW_MAX_CONCURRENCY`）。每个并行槽独占一份完整工作副本、ocr HOME 和 CodeGraph 索引（详见 6.1「隔离模型」）。
 - **服务重启**：残留的 `running` 任务标记为 `failed`（原因 `service restarted`），`queued` 任务继续执行。
 
 ---
