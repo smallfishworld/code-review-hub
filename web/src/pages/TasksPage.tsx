@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useId, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   api,
+  type ApiError,
+  type FeedbackOutcome,
   type ReportDetail,
-  type ReportIssue,
+  type ReviewVerdict,
   type Task,
   type TaskList,
   type TaskMcpAudit,
@@ -19,6 +21,38 @@ const STATUS_LABEL: Record<string, string> = {
   failed: '失败',
   cancelled: '已取消',
 };
+
+const FEEDBACK_LABEL: Record<ReviewVerdict, string> = {
+  false_positive: '已标误报',
+  fixed: '已标修复',
+  wont_fix: '已标不修复',
+};
+
+function RetryTaskButton({ taskId, className }: { taskId: number; className: string }) {
+  const [busy, setBusy] = useState(false);
+  const flash = useFlash();
+  const navigate = useNavigate();
+
+  const retry = async () => {
+    setBusy(true);
+    try {
+      const { task } = await api.post<{ task: Task }>(`/api/tasks/${taskId}/retry`);
+      flash.ok(`已重新触发评审任务 #${task.id}`);
+      void navigate(`/tasks/${task.id}`);
+    } catch (err) {
+      flash.fail(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <button type="button" className={className} onClick={retry} disabled={busy}>
+      {busy ? '重试中…' : '重试'}
+      <span className="visually-hidden">任务 #{taskId}</span>
+    </button>
+  );
+}
 
 /** ocr severity values (critical/high/medium/low) → 中文标签 + tag class. */
 const SEVERITY_LABEL: Record<string, string> = {
@@ -196,6 +230,9 @@ export function TasksPage() {
                     <th scope="col">模型</th>
                     <th scope="col">状态</th>
                     <th scope="col">创建时间</th>
+                    <th scope="col" className="actions-cell">
+                      操作
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -213,6 +250,11 @@ export function TasksPage() {
                         <span className={`tag ${task.status}`}>{STATUS_LABEL[task.status]}</span>
                       </td>
                       <td className="small">{formatTime(task.createdAt)}</td>
+                      <td className="actions-cell">
+                        {task.status === 'failed' && (
+                          <RetryTaskButton taskId={task.id} className="link" />
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -228,6 +270,10 @@ export function TasksPage() {
 export function TaskDetailPage() {
   const { id } = useParams();
   const taskId = Number(id);
+  return <TaskDetail key={taskId} taskId={taskId} />;
+}
+
+function TaskDetail({ taskId }: { taskId: number }) {
   usePageTitle(`任务 #${taskId}`);
   const task = useApi(() => api.get<Task>(`/api/tasks/${taskId}`), [taskId]);
   const report = useApi(
@@ -244,26 +290,52 @@ export function TaskDetailPage() {
   );
   const flash = useFlash();
   const [busy, setBusy] = useState(false);
-  const [feedbackDone, setFeedbackDone] = useState<Record<number, string>>({});
+  const [pendingFeedback, setPendingFeedback] = useState<{
+    issueId: number;
+    verdict: 'false_positive' | 'wont_fix';
+  } | null>(null);
+  const [reason, setReason] = useState('');
+  const [feedbackError, setFeedbackError] = useState('');
+  const feedbackDialog = useRef<HTMLDialogElement>(null);
+  const feedbackTitleId = useId();
+  const wontFix = pendingFeedback?.verdict === 'wont_fix';
 
-  const sendFeedback = async (issue: ReportIssue, verdict: 'false_positive' | 'fixed') => {
-    const note = verdict === 'false_positive' ? window.prompt('误报原因（可选）：') ?? '' : '';
-    if (verdict === 'false_positive' && note === null) return;
+  useEffect(() => {
+    const dialog = feedbackDialog.current;
+    if (pendingFeedback && dialog && !dialog.open) dialog.showModal();
+  }, [pendingFeedback]);
+
+  const askForReason = (issueId: number, verdict: 'false_positive' | 'wont_fix') => {
+    setReason('');
+    setFeedbackError('');
+    setPendingFeedback({ issueId, verdict });
+  };
+
+  const closeFeedback = () => {
+    feedbackDialog.current?.close();
+    setPendingFeedback(null);
+  };
+
+  const sendFeedback = async (issueId: number, verdict: ReviewVerdict, note?: string) => {
     setBusy(true);
+    setFeedbackError('');
     try {
-      const res = await api.post<{ memoryAction: string }>(`/api/tasks/${taskId}/feedback`, {
-        issueId: issue.id,
+      const res = await api.post<FeedbackOutcome>(`/api/tasks/${taskId}/feedback`, {
+        issueId,
         verdict,
-        note: note || undefined,
+        note,
       });
-      setFeedbackDone((prev) => ({ ...prev, [issue.id]: verdict }));
-      flash.ok(
-        verdict === 'false_positive'
-          ? `已标记误报（${res.memoryAction === 'created' ? '新建' : res.memoryAction === 'reinforced' ? '强化' : '关联'}抑制记忆）`
-          : '已标记修复（生成历史记忆）'
-      );
+      await report.reload();
+      closeFeedback();
+      const label = FEEDBACK_LABEL[verdict];
+      flash.ok(res.memoryId === null ? label : `${label}，已关联项目记忆`);
     } catch (err) {
-      flash.fail(errorText(err));
+      if ((err as ApiError)?.status === 409) {
+        await report.reload();
+        closeFeedback();
+        flash.fail(errorText(err));
+      } else if (pendingFeedback) setFeedbackError(errorText(err));
+      else flash.fail(errorText(err));
     } finally {
       setBusy(false);
     }
@@ -302,13 +374,14 @@ export function TaskDetailPage() {
   };
 
   const t = task.data;
+  const refresh = () => Promise.all([task.reload(), report.reload(), mcpAudit.reload(), memoryAudit.reload()]);
 
   return (
     <div>
       <div className="page-head">
         <h1>任务 #{taskId}</h1>
         <div className="actions">
-          <button type="button" className="secondary" onClick={() => void task.reload()}>
+          <button type="button" className="secondary" onClick={() => void refresh()}>
             刷新
           </button>
           {active && (
@@ -316,6 +389,7 @@ export function TaskDetailPage() {
               取消任务
             </button>
           )}
+          {status === 'failed' && <RetryTaskButton taskId={taskId} className="secondary" />}
         </div>
       </div>
 
@@ -427,28 +501,41 @@ export function TaskDetailPage() {
                             <pre className="raw">{issue.suggestion}</pre>
                           </details>
                         )}
+                        {issue.feedback?.verdict === 'wont_fix' && issue.feedback.note && (
+                          <div className="small muted">不修复原因：{issue.feedback.note}</div>
+                        )}
                       </td>
                       <td className="actions-cell">
-                        <div className="row-actions">
-                          <button
-                            type="button"
-                            className="link"
-                            disabled={busy || feedbackDone[issue.id] !== undefined}
-                            onClick={() => void sendFeedback(issue, 'false_positive')}
-                          >
-                            {feedbackDone[issue.id] === 'false_positive' ? '已标误报' : '误报'}
-                            <span className="visually-hidden">issue {issue.id}</span>
-                          </button>
-                          <button
-                            type="button"
-                            className="link"
-                            disabled={busy || feedbackDone[issue.id] !== undefined}
-                            onClick={() => void sendFeedback(issue, 'fixed')}
-                          >
-                            {feedbackDone[issue.id] === 'fixed' ? '已标修复' : '已修复'}
-                            <span className="visually-hidden">issue {issue.id}</span>
-                          </button>
-                        </div>
+                        {issue.feedback ? (
+                          <span className="tag">{FEEDBACK_LABEL[issue.feedback.verdict]}</span>
+                        ) : (
+                          <div className="row-actions">
+                            <button
+                              type="button"
+                              className="link"
+                              disabled={busy}
+                              onClick={() => askForReason(issue.id, 'false_positive')}
+                            >
+                              误报<span className="visually-hidden">问题 #{issue.id}</span>
+                            </button>
+                            <button
+                              type="button"
+                              className="link"
+                              disabled={busy}
+                              onClick={() => void sendFeedback(issue.id, 'fixed')}
+                            >
+                              已修复<span className="visually-hidden">问题 #{issue.id}</span>
+                            </button>
+                            <button
+                              type="button"
+                              className="link"
+                              disabled={busy}
+                              onClick={() => askForReason(issue.id, 'wont_fix')}
+                            >
+                              不修复<span className="visually-hidden">问题 #{issue.id}</span>
+                            </button>
+                          </div>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -523,6 +610,50 @@ export function TaskDetailPage() {
           </ul>
         </section>
       )}
+      <dialog
+        ref={feedbackDialog}
+        className="confirm"
+        aria-labelledby={feedbackTitleId}
+        onCancel={(event) => {
+          event.preventDefault();
+          if (!busy) closeFeedback();
+        }}
+      >
+        {pendingFeedback && (
+          <form
+            className="form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const note = reason.trim();
+              if (busy || (wontFix && !note)) return;
+              void sendFeedback(pendingFeedback.issueId, pendingFeedback.verdict, note || undefined);
+            }}
+          >
+            <h2 id={feedbackTitleId}>{wontFix ? '标记不修复' : '标记误报'}</h2>
+            <label>
+              {wontFix ? '不修复原因（必填，将写入项目记忆）' : '误报原因（可选）'}
+              <textarea
+                rows={4}
+                value={reason}
+                onChange={(event) => setReason(event.target.value)}
+                required={wontFix}
+                maxLength={wontFix ? 500 : undefined}
+                readOnly={busy}
+                autoFocus
+              />
+            </label>
+            {feedbackError && <div className="alert error" role="alert">{feedbackError}</div>}
+            <div className="actions">
+              <button type="button" onClick={closeFeedback} disabled={busy}>
+                取消
+              </button>
+              <button type="submit" className="primary" disabled={busy || (wontFix && !reason.trim())}>
+                {busy ? '保存中…' : '保存'}
+              </button>
+            </div>
+          </form>
+        )}
+      </dialog>
     </div>
   );
 }

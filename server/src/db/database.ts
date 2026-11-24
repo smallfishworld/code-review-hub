@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 export type RepoType = 'svn' | 'git';
 
-export const SCHEMA_VERSION = 12;
+export const SCHEMA_VERSION = 13;
 
 /**
  * Ordered, append-only list of migrations. Each entry runs once, tracked in
@@ -363,6 +363,29 @@ const MIGRATIONS: { version: number; name: string; up: (db: Database.Database) =
       db.exec(`
         ALTER TABLE task ADD COLUMN provider_id INTEGER REFERENCES provider(id) ON DELETE SET NULL;
         ALTER TABLE task ADD COLUMN provider_label TEXT;
+      `);
+    },
+  },
+  {
+    version: 13,
+    name: 'review-feedback-wont-fix',
+    up: (db) => {
+      db.exec(`
+        ALTER TABLE review_feedback RENAME TO review_feedback_old;
+        CREATE TABLE review_feedback (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          task_id INTEGER NOT NULL REFERENCES task(id) ON DELETE CASCADE,
+          issue_id INTEGER NOT NULL REFERENCES report_issue(id) ON DELETE CASCADE,
+          verdict TEXT NOT NULL CHECK (verdict IN ('false_positive','fixed','valid','wont_fix')),
+          memory_id INTEGER REFERENCES memory_entry(id) ON DELETE SET NULL,
+          note TEXT,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          UNIQUE (issue_id, verdict)
+        );
+        INSERT INTO review_feedback (id, task_id, issue_id, verdict, memory_id, note, created_at)
+          SELECT id, task_id, issue_id, verdict, memory_id, note, created_at FROM review_feedback_old;
+        DROP TABLE review_feedback_old;
+        CREATE INDEX idx_review_feedback_task ON review_feedback(task_id);
       `);
     },
   },

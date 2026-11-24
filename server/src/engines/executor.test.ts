@@ -8,6 +8,8 @@ import type Database from 'better-sqlite3';
 import { openDatabase } from '../db/database.js';
 import { SecretStore } from '../crypto/secrets.js';
 import { CredentialService } from '../crypto/credentialService.js';
+import { processFeedback } from '../memory/feedback.js';
+import { MemoryStore } from '../memory/store.js';
 import { RepoService } from '../repos/repoService.js';
 import { ReportService } from '../tasks/reportService.js';
 import { TaskQueue, type TaskRecord } from '../tasks/taskQueue.js';
@@ -70,6 +72,40 @@ function createSvnRepo(name: string): string {
 }
 
 describe('engine execution and report publication', () => {
+  it('gives the next review the accepted risk and asks for evidence before reporting it again', async () => {
+    const repoId = addRepo();
+    vi.mocked(OcrEngine.prototype.probe).mockResolvedValue({ ok: true, degraded: ['mcp'] });
+    vi.spyOn(OcrEngine.prototype, 'prepare').mockResolvedValue({
+      changedFiles: ['src/compat.ts'], identifiers: [],
+    });
+    const review = vi.spyOn(OcrEngine.prototype, 'review').mockImplementation(async (req) => {
+      writeFileSync(req.reportPath, JSON.stringify({ status: 'success', comments: [
+        { path: 'src/compat.ts', start_line: 10, content: '保留了旧客户端使用的行为' },
+      ] }));
+      return { exitCode: 0 };
+    });
+    const first = queue.enqueue(repoId, 'abcd', 'manual');
+    await queue.idle();
+    const [issue] = reports.issues(first.id);
+    const store = new MemoryStore(db, dir);
+    const { memoryId } = processFeedback(db, store, first.id, {
+      issueId: issue.id, verdict: 'wont_fix', note: '旧客户端尚未迁移。',
+    });
+    const currentReason = '不修复原因：在兼容旧客户端期间保留该行为。';
+    store.update(memoryId!, { body: currentReason });
+
+    const next = queue.enqueue(repoId, 'dcba', 'manual');
+    await queue.idle();
+    expect(queue.get(next.id).status).toBe('succeeded');
+    const context = review.mock.calls[1][0].requirementText;
+    expect(context).toContain('已接受的风险');
+    expect(context).toContain('原评审节点 abcd · src/compat.ts:10');
+    expect(context).toContain(currentReason);
+    expect(context).toContain('仅在有证据表明原理由已失效');
+    expect(context).toContain('说明变化及证据');
+    expect(reports.issues(next.id)).toHaveLength(1); // Findings emitted by the engine are still preserved.
+  });
+
   it.each([undefined, 'not JSON', '{}', '{"status":"error","comments":[]}'])(
     'fails when an exit-zero engine publishes an unusable report (%s)',
     async (raw) => {

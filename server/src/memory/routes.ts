@@ -176,7 +176,10 @@ export function buildMemoryRoutes(
       if (!body.issueId || !body.verdict) {
         return reply.code(400).send({ message: '缺少 issueId 或 verdict' });
       }
-      if (!['false_positive', 'fixed', 'valid'].includes(body.verdict)) {
+      if (!Number.isSafeInteger(body.issueId) || body.issueId < 1) {
+        return reply.code(400).send({ message: 'issueId 必须为正整数' });
+      }
+      if (!['false_positive', 'fixed', 'valid', 'wont_fix'].includes(body.verdict)) {
         return reply.code(400).send({ message: 'verdict 无效' });
       }
       try {

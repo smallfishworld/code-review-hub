@@ -5,9 +5,8 @@ import { MemoryStore, type MemoryEntry } from './store.js';
 /**
  * Issue feedback loop (project-memory spec): 「误报」aggregates into a
  * suppression entry keyed by fingerprint (feedback_count escalates confidence
- * every 3rd confirmation); 「已修复」writes a history entry. Every feedback
- * row references the memory entry it created/reinforced (review_feedback
- * .memory_id) — idempotent per (issue_id, verdict).
+ * every 3rd confirmation). 「已修复」writes a history entry, and 「不修复」
+ * records an accepted risk as a pitfall. Repeating a verdict is idempotent.
  */
 
 export class FeedbackError extends Error {
@@ -19,9 +18,11 @@ export class FeedbackError extends Error {
   }
 }
 
+export type FeedbackVerdict = 'false_positive' | 'fixed' | 'valid' | 'wont_fix';
+
 export interface FeedbackInput {
   issueId: number;
-  verdict: 'false_positive' | 'fixed' | 'valid';
+  verdict: FeedbackVerdict;
   note?: string;
 }
 
@@ -43,25 +44,50 @@ export function processFeedback(
   taskId: number,
   input: FeedbackInput
 ): FeedbackOutcome {
+  if (input.note != null && typeof input.note !== 'string') {
+    throw new FeedbackError('原因必须为文本');
+  }
+  const note = input.note?.trim();
+  if (input.verdict === 'wont_fix' && (!note || note.length > 500)) {
+    throw new FeedbackError('请填写不修复原因（1–500 字符）');
+  }
+  return db.transaction(writeFeedback).immediate(db, store, taskId, { ...input, note });
+}
+
+function writeFeedback(
+  db: Database.Database,
+  store: MemoryStore,
+  taskId: number,
+  input: FeedbackInput
+): FeedbackOutcome {
   const task = db.prepare('SELECT repo_id FROM task WHERE id = ?').get(taskId) as
     | { repo_id: number }
     | undefined;
   if (!task) throw new FeedbackError('任务不存在', 404);
   const issue = db
     .prepare(
-      `SELECT ri.id, ri.report_id, ri.file, ri.category, ri.description
+      `SELECT ri.id, ri.file, ri.category, ri.description
        FROM report_issue ri JOIN report r ON r.id = ri.report_id
        WHERE ri.id = ? AND r.task_id = ?`
     )
     .get(input.issueId, taskId) as
-    | { id: number; report_id: number; file: string | null; category: string | null; description: string }
+    | { id: number; file: string | null; category: string | null; description: string }
     | undefined;
   if (!issue) throw new FeedbackError('该任务下不存在此 issue', 404);
 
   const existing = db
-    .prepare('SELECT id, memory_id FROM review_feedback WHERE issue_id = ? AND verdict = ?')
-    .get(input.issueId, input.verdict) as { id: number; memory_id: number | null } | undefined;
+    .prepare(
+      `SELECT id, memory_id, verdict FROM review_feedback
+       WHERE issue_id = ? AND (verdict = ? OR (verdict != 'valid' AND ? != 'valid'))
+       ORDER BY (verdict = ?) DESC, id DESC LIMIT 1`
+    )
+    .get(input.issueId, input.verdict, input.verdict, input.verdict) as
+    | { id: number; memory_id: number | null; verdict: FeedbackVerdict }
+    | undefined;
   if (existing) {
+    if (existing.verdict !== input.verdict) {
+      throw new FeedbackError('此问题已记录其他处理结果', 409);
+    }
     const memory = existing.memory_id ? store.get(existing.memory_id) : null;
     return {
       feedbackId: existing.id,
@@ -73,6 +99,8 @@ export function processFeedback(
 
   let memoryId: number | null = null;
   let action: FeedbackOutcome['memoryAction'] = 'none';
+  const description = issue.description.replace(/\s+/g, ' ').trim();
+  const noteTitle = input.note?.replace(/\s+/g, ' ');
   if (input.verdict === 'false_positive') {
     const fp = issueFingerprint({
       file: issue.file,
@@ -106,7 +134,7 @@ export function processFeedback(
           repoId: task.repo_id,
           kind: 'suppression',
           scope: issue.file ? issue.file.replace(/\\/g, '/').split('/').slice(0, 2).join('/') : null,
-          title: input.note?.trim() || issue.description.slice(0, 60) || '误报模式',
+          title: noteTitle || description.slice(0, 60) || '误报模式',
           body: issue.description,
           fingerprint: fp,
           confidence: 0.7,
@@ -123,9 +151,22 @@ export function processFeedback(
       repoId: task.repo_id,
       kind: 'history',
       scope: issue.file ?? null,
-      title: input.note?.trim() || issue.description.slice(0, 60) || '已修复问题',
+      title: noteTitle || description.slice(0, 60) || '已修复问题',
       body: issue.description,
       confidence: 0.6,
+      sourceTaskId: taskId,
+    });
+    memoryId = entry.id;
+    action = 'created';
+  } else if (input.verdict === 'wont_fix') {
+    const reason = (input.note ?? '').split(/\r?\n/).map((line) => `> ${line}`).join('\n');
+    const entry = store.create({
+      repoId: task.repo_id,
+      kind: 'pitfall',
+      scope: issue.file?.replace(/\\/g, '/') ?? null,
+      title: `不修复 #${issue.id} · ${description.slice(0, 60)}`,
+      body: `已确认的问题：${description.slice(0, 300)}\n\n不修复原因：\n${reason}`,
+      confidence: 0.7,
       sourceTaskId: taskId,
     });
     memoryId = entry.id;

@@ -131,6 +131,8 @@ export interface TaskList {
   items: Task[];
 }
 
+export type ReviewVerdict = 'false_positive' | 'fixed' | 'wont_fix';
+
 export interface ReportIssue {
   id: number;
   file: string | null;
@@ -142,6 +144,7 @@ export interface ReportIssue {
   suggestion?: string | null;
   suppressed?: boolean;
   suppressedBy?: number | null;
+  feedback?: { verdict: ReviewVerdict; note: string | null };
 }
 
 export interface ReportDetail {

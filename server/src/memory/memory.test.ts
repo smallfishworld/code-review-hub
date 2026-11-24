@@ -7,6 +7,7 @@ import { MemoryStore, memoryDir } from './store.js';
 import { MemoryRetrieval, estimateTokens } from './retrieval.js';
 import { issueFingerprint, matchSuppressions } from './suppressFilter.js';
 import { processFeedback } from './feedback.js';
+import { ReportService } from '../tasks/reportService.js';
 import { runArchivalScan, runCompaction, bumpReviewCount } from './evolve.js';
 import type Database from 'better-sqlite3';
 
@@ -216,6 +217,66 @@ describe('feedback loop', () => {
     });
     expect(b.feedbackId).toBe(a.feedbackId);
     expect(b.memoryAction).toBe('none');
+  });
+
+  it('rejects a conflicting decision and keeps a multiline note reloadable', () => {
+    const { taskId, issueId } = seedIssue();
+    const note = '调用方已校验。\n## 兼容旧客户端';
+    const result = processFeedback(db, store, taskId, {
+      issueId, verdict: 'false_positive', note,
+    });
+    expect(() => processFeedback(db, store, taskId, {
+      issueId, verdict: 'wont_fix', note: '保留该风险。',
+    })).toThrow(expect.objectContaining({ statusCode: 409 }));
+    expect(store.reloadFromMarkdown(1)).toEqual({ updated: 1, created: 0 });
+    expect(store.list(1)).toHaveLength(1);
+    expect(store.get(result.memoryId!)?.title).toBe('调用方已校验。 ## 兼容旧客户端');
+    expect(new ReportService(db).detail(taskId)?.issues[0]?.feedback)
+      .toEqual({ verdict: 'false_positive', note });
+  });
+
+  it('records the reason for not fixing an issue in project memory and report detail', () => {
+    const { taskId, issueId } = seedIssue({ file: 'src/utils/helper.ts' });
+    expect(() => processFeedback(db, store, taskId, {
+      issueId, verdict: 'wont_fix', note: '  ',
+    })).toThrow('请填写不修复原因');
+    expect(store.list(1)).toHaveLength(0);
+
+    const note = '兼容旧客户端，保留现有行为。';
+    const input = { issueId, verdict: 'wont_fix', note } as const;
+    const result = processFeedback(db, store, taskId, input);
+    expect(result.memory).toMatchObject({ kind: 'pitfall', scope: 'src/utils/helper.ts', sourceTaskId: taskId });
+    expect(result.memory?.body).toContain(note);
+    expect(processFeedback(db, store, taskId, input).feedbackId).toBe(result.feedbackId);
+    expect(store.list(1)).toHaveLength(1);
+    expect(matchSuppressions(db, 1, [{ file: 'src/utils/helper.ts', category: 'bug', description: '可能的空指针引用' }])).toEqual([null]);
+    expect(new ReportService(db).detail(taskId)?.issues[0]?.feedback).toEqual({
+      verdict: 'wont_fix', note,
+    });
+  });
+
+  it('recalls active accepted risks for their exact file and original repository source', () => {
+    const { taskId, issueId } = seedIssue({ file: 'src\\compat.ts' });
+    const result = processFeedback(db, store, taskId, {
+      issueId, verdict: 'wont_fix', note: '兼容旧客户端。',
+    });
+    const memoryId = result.memoryId!;
+    const generic = store.create({
+      repoId: 1, kind: 'pitfall', scope: null, title: '已知行为', body: '历史说明', confidence: 0.95,
+    });
+    const retrieval = new MemoryRetrieval(store, db);
+    const changes = { changedFiles: ['./src/compat.ts'], identifiers: [] };
+    const picked = retrieval.retrieve(1, changes);
+    expect(picked.map(({ id }) => id)).toEqual([memoryId, generic.id]);
+    expect(picked[0].acceptedRisk).toEqual({ file: 'src/compat.ts', line: 10, node: '1' });
+    expect(retrieval.retrieve(1, { changedFiles: ['src/compat.tsx'], identifiers: [] }))
+      .toEqual([generic]);
+
+    store.update(memoryId, { status: 'archived' });
+    expect(retrieval.retrieve(1, changes)).toEqual([generic]);
+    store.update(memoryId, { status: 'active' });
+    db.prepare('UPDATE repo SET source_version = 1 WHERE id = 1').run();
+    expect(retrieval.retrieve(1, changes)).toEqual([generic]);
   });
 
   it('rejects feedback for issues of another task', () => {

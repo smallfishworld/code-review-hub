@@ -1,6 +1,16 @@
 import type Database from 'better-sqlite3';
 import type { MemoryEntry, MemoryStore } from './store.js';
 
+interface AcceptedRisk {
+  file: string | null;
+  line: number | null;
+  node: string;
+}
+
+export interface ReviewMemoryEntry extends MemoryEntry {
+  acceptedRisk?: AcceptedRisk;
+}
+
 /**
  * Pre-review memory retrieval (design D6): scope prefix matching union FTS
  * (or LIKE fallback) over the change set collected by the engine's prepare(),
@@ -20,17 +30,29 @@ export class MemoryRetrieval {
     repoId: number,
     input: { changedFiles: string[]; identifiers: string[] },
     opts: { budgetTokens?: number; limit?: number } = {}
-  ): MemoryEntry[] {
+  ): ReviewMemoryEntry[] {
     const budget = opts.budgetTokens ?? 1500;
-    const candidates = new Map<number, MemoryEntry>();
+    const changedFiles = new Set(input.changedFiles.map(normalizePath));
+    const acceptedRisks = this.acceptedRisks(repoId);
+    const candidates = new Map<number, ReviewMemoryEntry>();
     const consider = (e: MemoryEntry): void => {
       if (e.status !== 'active') return;
       if (e.confidence < 0.3) return; // 污染防护：低置信度不召回
-      if (!candidates.has(e.id)) candidates.set(e.id, e);
+      if (candidates.has(e.id)) return;
+      const risk = acceptedRisks.get(e.id);
+      if (risk && !risk.sameSource) return;
+      candidates.set(e.id, risk
+        ? { ...e, acceptedRisk: { file: risk.file, line: risk.line, node: risk.node } }
+        : e);
     };
 
     // 1) scope prefix match over changed files
     for (const entry of this.store.list(repoId, { status: 'active' })) {
+      const risk = acceptedRisks.get(entry.id);
+      if (risk?.file) {
+        if (changedFiles.has(risk.file)) consider(entry);
+        continue;
+      }
       if (!entry.scope) {
         consider(entry); // 全仓库作用域
         continue;
@@ -54,9 +76,13 @@ export class MemoryRetrieval {
 
     // 3) score + budget truncation
     const scored = rankEntries([...candidates.values()], Date.now());
-    scored.sort((a, b) => b.score - a.score);
+    const matchesChangedFile = (entry: ReviewMemoryEntry) =>
+      Number(entry.acceptedRisk?.file != null && changedFiles.has(entry.acceptedRisk.file));
+    scored.sort((a, b) =>
+      matchesChangedFile(b.entry) - matchesChangedFile(a.entry) || b.score - a.score
+    );
 
-    const picked: MemoryEntry[] = [];
+    const picked: ReviewMemoryEntry[] = [];
     let used = 0;
     for (const s of scored) {
       const cost = estimateTokens(renderEntry(s.entry));
@@ -65,6 +91,22 @@ export class MemoryRetrieval {
       used += cost;
     }
     return picked;
+  }
+
+  private acceptedRisks(repoId: number): Map<number, AcceptedRisk & { sameSource: number }> {
+    const rows = this.db.prepare(
+      `SELECT f.memory_id AS memoryId, i.file, i.line, t.node,
+              t.source_version = r.source_version AS sameSource
+       FROM review_feedback f
+       JOIN task t ON t.id = f.task_id
+       JOIN repo r ON r.id = t.repo_id
+       JOIN report_issue i ON i.id = f.issue_id
+       WHERE t.repo_id = ? AND f.verdict = 'wont_fix' AND f.memory_id IS NOT NULL
+       ORDER BY f.id`
+    ).all(repoId) as (AcceptedRisk & { memoryId: number; sameSource: number })[];
+    return new Map(rows.map(({ memoryId, file, ...risk }) => [
+      memoryId, { ...risk, file: file ? normalizePath(file) : null },
+    ]));
   }
 
   /** FTS5 MATCH over title/body; each term quoted (FTS5 operator chars). */
@@ -131,10 +173,10 @@ function recency(updatedAt: string, now: number): number {
 }
 
 /** Canonical ranking (confidence × recency × hits) — shared by injection and the MCP bridge. */
-export function rankEntries(
-  entries: MemoryEntry[],
+export function rankEntries<T extends MemoryEntry>(
+  entries: T[],
   now: number
-): { entry: MemoryEntry; score: number }[] {
+): { entry: T; score: number }[] {
   return entries.map((entry) => ({
     entry,
     score: entry.confidence * recency(entry.updatedAt, now) * Math.log2(2 + entry.hits),
@@ -152,7 +194,19 @@ export function estimateTokens(text: string): number {
   return Math.ceil(ascii / 4) + Math.ceil(nonAscii * 1.5);
 }
 
-function renderEntry(e: MemoryEntry): string {
+function normalizePath(file: string): string {
+  return file.replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+export function formatAcceptedRiskOrigin(risk: AcceptedRisk): string {
+  const origin = `原评审节点 ${risk.node}`;
+  if (!risk.file) return origin;
+  const location = risk.line === null ? risk.file : `${risk.file}:${risk.line}`;
+  return `${origin} · ${location}`;
+}
+
+function renderEntry(e: ReviewMemoryEntry): string {
   const head = `- [${e.kind}] ${e.title}`;
+  if (e.acceptedRisk) return `${head}（${formatAcceptedRiskOrigin(e.acceptedRisk)}）: ${e.body}`;
   return e.scope ? `${head}（范围 ${e.scope}）: ${e.body}` : `${head}: ${e.body}`;
 }

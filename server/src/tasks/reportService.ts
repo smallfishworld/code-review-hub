@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { matchSuppressions } from '../memory/suppressFilter.js';
+import type { FeedbackVerdict } from '../memory/feedback.js';
 import type { NormalizedReport } from '../engines/types.js';
 
 /**
@@ -99,6 +100,11 @@ export interface StoredReport {
 export interface CompletedReviewReport extends NormalizedReport {
   rawPath: string;
   engineName: string;
+}
+
+interface IssueFeedback {
+  verdict: Exclude<FeedbackVerdict, 'valid'>;
+  note: string | null;
 }
 
 export interface StoredIssue {
@@ -370,8 +376,8 @@ export class ReportService {
   /** Full detail: index row + parsed issues + raw JSON text. */
   detail(taskId: number): {
     report: StoredReport;
-    issues: StoredIssue[];
-    suppressedIssues: StoredIssue[];
+    issues: (StoredIssue & { feedback?: IssueFeedback })[];
+    suppressedIssues: (StoredIssue & { feedback?: IssueFeedback })[];
     raw: string | null;
   } | null {
     const report = this.get(taskId);
@@ -382,7 +388,16 @@ export class ReportService {
     } catch {
       raw = null;
     }
-    const all = this.issues(taskId, { includeSuppressed: true });
+    const feedbackRows = this.db.prepare(
+      "SELECT issue_id, verdict, note FROM review_feedback WHERE task_id = ? AND verdict != 'valid' ORDER BY id"
+    ).all(taskId) as ({ issue_id: number } & IssueFeedback)[];
+    const feedbackByIssue = new Map(
+      feedbackRows.map(({ issue_id, verdict, note }) => [issue_id, { verdict, note }])
+    );
+    const all = this.issues(taskId, { includeSuppressed: true }).map((issue) => {
+      const feedback = feedbackByIssue.get(issue.id);
+      return feedback ? { ...issue, feedback } : issue;
+    });
     return {
       report,
       issues: all.filter((i) => !i.suppressed),

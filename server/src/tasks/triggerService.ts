@@ -49,6 +49,21 @@ export class TriggerService {
     private readonly dataDir: string
   ) {}
 
+  retry(taskId: number): TaskRecord {
+    const failed = this.queue.find(taskId);
+    if (!failed) throw new TriggerError('任务不存在', 404);
+    if (failed.status !== 'failed') throw new TriggerError('只有失败的任务可以重试', 409);
+
+    const repo = this.getRepo(failed.repoId);
+    if (repo.source_version !== (failed.sourceVersion ?? 0)) {
+      throw new TriggerError('仓库来源已变更，请重新选择评审节点', 409);
+    }
+    return this.queue.enqueue(failed.repoId, failed.node, failed.trigger, failed.author, {
+      sourceVersion: repo.source_version,
+      monitorRuleId: failed.monitorRuleId,
+    });
+  }
+
   /** Trigger a review of one node. Returns duplicate=true when it already ran. */
   async triggerSingle(
     repoId: number,

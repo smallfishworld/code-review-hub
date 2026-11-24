@@ -14,6 +14,7 @@ import { ReportService } from './reportService.js';
  * GET  /api/tasks/:id
  * GET  /api/tasks/:id/report        (index + issues + raw JSON)
  * POST /api/tasks/:id/cancel
+ * POST /api/tasks/:id/retry
  */
 export function buildTaskRoutes(
   db: Database.Database,
@@ -82,11 +83,7 @@ export function buildTaskRoutes(
 
     app.get('/api/tasks/:id', async (req, reply) => {
       const { id } = req.params as { id: string };
-      try {
-        return queue.get(Number(id));
-      } catch {
-        return reply.code(404).send({ message: '任务不存在' });
-      }
+      return queue.find(Number(id)) ?? reply.code(404).send({ message: '任务不存在' });
     });
 
     app.get('/api/tasks/:id/report', async (req, reply) => {
@@ -107,6 +104,15 @@ export function buildTaskRoutes(
       const ok = queue.cancel(Number(id));
       if (!ok) return reply.code(409).send({ message: '任务已结束，无法取消' });
       return { task: queue.get(Number(id)) };
+    });
+
+    app.post('/api/tasks/:id/retry', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      try {
+        return reply.code(201).send({ task: service.retry(Number(id)) });
+      } catch (err) {
+        return handleError(err, reply);
+      }
     });
   };
 

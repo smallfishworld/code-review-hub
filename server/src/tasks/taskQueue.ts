@@ -244,9 +244,14 @@ export class TaskQueue extends EventEmitter {
   }
 
   get(taskId: number): TaskRecord {
+    const task = this.find(taskId);
+    if (!task) throw new Error('task not found');
+    return task;
+  }
+
+  find(taskId: number): TaskRecord | null {
     const row = this.db.prepare('SELECT * FROM task WHERE id = ?').get(taskId) as Record<string, unknown> | undefined;
-    if (!row) throw new Error('task not found');
-    return rowToTask(row);
+    return row ? rowToTask(row) : null;
   }
 
   list(filter: {

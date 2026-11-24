@@ -107,6 +107,51 @@ function addRealSvnRepo(url: string): number {
 const post = (url: string, body?: unknown) =>
   app.inject({ method: 'POST', url, payload: body });
 
+describe('task retry API', () => {
+  it('queues the same node with its monitor context and reuses an active retry', async () => {
+    const repoId = addSvnRepo();
+    const { lastInsertRowid } = db.prepare(
+      `INSERT INTO task (repo_id, node, trigger, status, author, monitor_rule_id, error)
+       VALUES (?, '42', 'auto', 'failed', 'alice', 7, 'previous failure')`
+    ).run(repoId);
+    const failedId = Number(lastInsertRowid);
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    queue['executor'] = async () => {
+      await gate;
+      return { exitCode: 0 };
+    };
+    try {
+      const [first, second] = await Promise.all([
+        post(`/api/tasks/${failedId}/retry`),
+        post(`/api/tasks/${failedId}/retry`),
+      ]);
+      expect(first.statusCode).toBe(201);
+      expect(second.statusCode).toBe(201);
+      const { task } = first.json();
+      expect(task).toMatchObject({ repoId, node: '42', trigger: 'auto', author: 'alice', monitorRuleId: 7 });
+      expect(task.id).not.toBe(failedId);
+      expect(second.json().task.id).toBe(task.id);
+      expect(queue.get(failedId)).toMatchObject({ status: 'failed', error: 'previous failure' });
+      expect((await post(`/api/tasks/${task.id}/retry`)).statusCode).toBe(409);
+    } finally {
+      release();
+      await queue.idle();
+    }
+  });
+
+  it('rejects missing tasks and failed tasks from an old repository source', async () => {
+    const repoId = addSvnRepo();
+    const { lastInsertRowid } = db.prepare(
+      "INSERT INTO task (repo_id, node, trigger, status) VALUES (?, '42', 'manual', 'failed')"
+    ).run(repoId);
+    db.prepare('UPDATE repo SET source_version = 1 WHERE id = ?').run(repoId);
+    expect((await post('/api/tasks/999/retry')).statusCode).toBe(404);
+    expect((await post(`/api/tasks/${lastInsertRowid}/retry`)).statusCode).toBe(409);
+    expect(queue.list({}).total).toBe(1);
+  });
+});
+
 describe('manual trigger API (git)', () => {
   it('triggers a single commit review with a short sha (unique)', async () => {
     const { origin, shas } = makeGitOrigin(2);

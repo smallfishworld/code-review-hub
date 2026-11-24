@@ -96,9 +96,8 @@
   }
 
   .content {
-    min-width: 0;
+    min-inline-size: 0;
     padding: 26px 32px 72px;
-    max-inline-size: 1440px;
   }
 
   /* ----------------------------------------------------------- page header */
