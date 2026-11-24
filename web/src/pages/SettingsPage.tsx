@@ -56,100 +56,105 @@ export function SettingsPage() {
   return (
     <div>
       <div className="page-head">
-        <h1>系统设置</h1>
+        <div className="page-title-group">
+          <h1>系统设置</h1>
+          <p className="page-subtitle">检查外部命令行运行依赖环境并维护管理员安全口令</p>
+        </div>
       </div>
 
-      <section className="card" aria-labelledby="deps-title">
-        <div className="page-head">
-          <h2 id="deps-title">依赖状态</h2>
-          <button
-            type="button"
-            className="secondary small"
-            onClick={() => void recheckDeps()}
-            disabled={checking}
-          >
-            {checking ? '检测中…' : '重新检测'}
-          </button>
-        </div>
-        {deps.loading && <p className="muted">检测中…</p>}
-        {deps.error && (
-          <div className="alert error" role="alert">
-            {deps.error}
-          </div>
-        )}
-        {deps.data && (
-          <div className="table-wrap">
-            <table className="table">
-              <caption className="visually-hidden">外部命令依赖检测结果</caption>
-              <thead>
-                <tr>
-                  <th scope="col">命令</th>
-                  <th scope="col">状态</th>
-                  <th scope="col">版本</th>
-                  <th scope="col">说明</th>
-                </tr>
-              </thead>
-              <tbody>
-                {deps.data.results.map((dep) => (
-                  <tr key={dep.command}>
-                    <td className="mono">{dep.command}</td>
-                    <td>
-                      <span className={dep.found && dep.executable ? 'tag ok' : 'tag failed'}>
-                        {dep.found && dep.executable ? '可用' : '不可用'}
-                      </span>
-                    </td>
-                    <td className="small">{dep.version ?? '—'}</td>
-                    <td className="small">
-                      {dep.conditional ? '按仓库类型条件需要' : '必需'}
-                      {dep.minVersion ? `，要求 ≥ ${dep.minVersion}` : ''}
-                      {dep.note ? `：${dep.note}` : ''}
-                      {dep.error ? `：${dep.error}` : ''}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      <section className="card narrow" aria-labelledby="password-title">
-        <h2 id="password-title">管理员口令</h2>
-        <form className="form" onSubmit={changePassword} aria-describedby={ids.hint}>
-          {auth.data?.loginRequired && (
-            <label htmlFor={ids.current}>
-              当前口令
-              <input
-                id={ids.current}
-                type="password"
-                value={current}
-                onChange={(e) => setCurrent(e.target.value)}
-                autoComplete="current-password"
-              />
-            </label>
-          )}
-          <label htmlFor={ids.next}>
-            新口令
-            <input
-              id={ids.next}
-              type="password"
-              value={next}
-              onChange={(e) => setNext(e.target.value)}
-              minLength={6}
-              required
-              autoComplete="new-password"
-            />
-          </label>
-          <p className="muted small" id={ids.hint}>
-            至少 6 位。当前版本仅支持管理员口令登录，统一登录（OA / LDAP）为预留扩展点。
-          </p>
-          <div className="actions">
-            <button className="primary" type="submit" disabled={busy}>
-              更新口令
+      <div className="split settings-split">
+        <section className="card" aria-labelledby="deps-title">
+          <div className="card-head">
+            <h2 id="deps-title">依赖状态</h2>
+            <button
+              type="button"
+              className="secondary small"
+              onClick={() => void recheckDeps()}
+              disabled={checking}
+            >
+              {checking ? '检测中…' : '重新检测'}
             </button>
           </div>
-        </form>
-      </section>
+          {deps.loading && <p className="muted">检测中…</p>}
+          {deps.error && (
+            <div className="alert error" role="alert">
+              {deps.error}
+            </div>
+          )}
+          {deps.data && (
+            <div className="table-wrap">
+              <table className="table">
+                <caption className="visually-hidden">外部命令依赖检测结果</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">命令</th>
+                    <th scope="col">状态</th>
+                    <th scope="col">版本</th>
+                    <th scope="col">说明</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {deps.data.results.map((dep) => (
+                    <tr key={dep.command}>
+                      <td className="mono">{dep.command}</td>
+                      <td>
+                        <span className={dep.found && dep.executable ? 'tag ok' : 'tag failed'}>
+                          {dep.found && dep.executable ? '可用' : '不可用'}
+                        </span>
+                      </td>
+                      <td className="small">{dep.version ?? '—'}</td>
+                      <td className="small">
+                        {dep.conditional ? '按仓库类型条件需要' : '必需'}
+                        {dep.minVersion ? `，要求 ≥ ${dep.minVersion}` : ''}
+                        {dep.note ? `：${dep.note}` : ''}
+                        {dep.error ? `：${dep.error}` : ''}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
+        <section className="card" aria-labelledby="password-title">
+          <h2 id="password-title">管理员口令</h2>
+          <form className="form" onSubmit={changePassword} aria-describedby={ids.hint}>
+            {auth.data?.loginRequired && (
+              <label htmlFor={ids.current}>
+                当前口令
+                <input
+                  id={ids.current}
+                  type="password"
+                  value={current}
+                  onChange={(e) => setCurrent(e.target.value)}
+                  autoComplete="current-password"
+                />
+              </label>
+            )}
+            <label htmlFor={ids.next}>
+              新口令
+              <input
+                id={ids.next}
+                type="password"
+                value={next}
+                onChange={(e) => setNext(e.target.value)}
+                minLength={6}
+                required
+                autoComplete="new-password"
+              />
+            </label>
+            <p className="muted small" id={ids.hint}>
+              至少 6 位。当前版本仅支持管理员口令登录，统一登录（OA / LDAP）为预留扩展点。
+            </p>
+            <div className="actions">
+              <button className="primary" type="submit" disabled={busy}>
+                更新口令
+              </button>
+            </div>
+          </form>
+        </section>
+      </div>
     </div>
   );
 }

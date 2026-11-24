@@ -129,7 +129,10 @@ export function TasksPage() {
   return (
     <div>
       <div className="page-head">
-        <h1>任务与报告</h1>
+        <div className="page-title-group">
+          <h1>任务与报告</h1>
+          <p className="page-subtitle">检索历史评审任务、查看缺陷报告并沉淀误报与修复反馈</p>
+        </div>
         <div className="actions">
           {hasFilters && (
             <button type="button" className="link" onClick={resetFilters}>
@@ -142,8 +145,10 @@ export function TasksPage() {
         </div>
       </div>
 
-      <section className="card" aria-labelledby="task-filters-title">
-        <h2 id="task-filters-title">筛选</h2>
+      <section className="card toolbar-card" aria-labelledby="task-filters-title">
+        <h2 id="task-filters-title" className="visually-hidden">
+          筛选
+        </h2>
         <div className="filter-row">
           <label htmlFor={ids.repo}>
             仓库
@@ -379,7 +384,12 @@ function TaskDetail({ taskId }: { taskId: number }) {
   return (
     <div>
       <div className="page-head">
-        <h1>任务 #{taskId}</h1>
+        <div className="page-title-group">
+          <Link to="/tasks" className="back-link">
+            ← 返回任务列表
+          </Link>
+          <h1>任务 #{taskId}</h1>
+        </div>
         <div className="actions">
           <button type="button" className="secondary" onClick={() => void refresh()}>
             刷新
@@ -401,7 +411,7 @@ function TaskDetail({ taskId }: { taskId: number }) {
       {t && (
         <section className="card" aria-labelledby="task-summary-title">
           <h2 id="task-summary-title">概览</h2>
-          <div className="stat-grid">
+          <div className="stat-grid cols-4">
             <div className="stat">
               <span className="stat-label">状态</span>
               <span className={`stat-value tag ${t.status}`}>{STATUS_LABEL[t.status]}</span>
@@ -449,8 +459,13 @@ function TaskDetail({ taskId }: { taskId: number }) {
 
       {report.data && (
         <section className="card" aria-labelledby="task-report-title">
-          <h2 id="task-report-title">评审报告</h2>
-          <p className="prewrap">{report.data.report.summary ?? '（无摘要）'}</p>
+          <div className="card-head">
+            <h2 id="task-report-title">评审报告</h2>
+            <span className="tag">
+              发现问题 {report.data.issues.length} 条
+            </span>
+          </div>
+          <div className="report-summary prewrap">{report.data.report.summary ?? '（无摘要）'}</div>
           {!report.data.report.parsedOk && (
             <div className="alert info">报告解析失败，已保留原文。</div>
           )}
@@ -458,14 +473,22 @@ function TaskDetail({ taskId }: { taskId: number }) {
             <p className="muted">未发现评审问题。</p>
           ) : (
             <div className="table-wrap">
-              <table className="table">
+              <table className="table report-table">
                 <caption className="visually-hidden">评审问题列表</caption>
                 <thead>
                   <tr>
-                    <th scope="col">文件</th>
-                    <th scope="col">行号</th>
-                    <th scope="col">级别</th>
-                    <th scope="col">缺陷类型</th>
+                    <th scope="col" className="col-file">
+                      文件
+                    </th>
+                    <th scope="col" className="col-meta">
+                      行号
+                    </th>
+                    <th scope="col" className="col-meta">
+                      级别
+                    </th>
+                    <th scope="col" className="col-meta">
+                      缺陷类型
+                    </th>
                     <th scope="col">问题描述与建议</th>
                     <th scope="col" className="actions-cell">
                       反馈
@@ -475,9 +498,9 @@ function TaskDetail({ taskId }: { taskId: number }) {
                 <tbody>
                   {report.data.issues.map((issue) => (
                     <tr key={issue.id}>
-                      <td className="mono">{issue.file ?? '—'}</td>
-                      <td>{issue.line ?? '—'}</td>
-                      <td>
+                      <td className="mono col-file">{issue.file ?? '—'}</td>
+                      <td className="col-meta">{issue.line ?? '—'}</td>
+                      <td className="col-meta">
                         {issue.severity ? (
                           <span className={`tag severity-${issue.severity.toLowerCase()}`}>
                             {severityLabel(issue.severity)}
@@ -486,14 +509,14 @@ function TaskDetail({ taskId }: { taskId: number }) {
                           '—'
                         )}
                       </td>
-                      <td>
+                      <td className="col-meta">
                         {issue.category ? (
                           <span className="tag category">{categoryLabel(issue.category)}</span>
                         ) : (
                           '—'
                         )}
                       </td>
-                      <td className="prewrap">
+                      <td className="col-desc prewrap">
                         {issue.description}
                         {issue.suggestion && (
                           <details>
@@ -548,7 +571,7 @@ function TaskDetail({ taskId }: { taskId: number }) {
               <summary>
                 已被项目记忆确定性抑制的问题（{report.data.suppressedIssues!.length} 条，默认不展示）
               </summary>
-              <ul>
+              <ul className="audit-list">
                 {report.data.suppressedIssues!.map((i) => (
                   <li key={i.id} className="small">
                     <span className="mono">{i.file ?? '—'}</span>
@@ -572,43 +595,48 @@ function TaskDetail({ taskId }: { taskId: number }) {
         <p className="muted">报告索引尚未生成，请稍后刷新。</p>
       )}
 
-      {mcpAudit.data && mcpAudit.data.servers.length > 0 && (
-        <section className="card" aria-labelledby="task-mcp-title">
-          <h2 id="task-mcp-title">MCP 注入审计</h2>
-          <ul>
-            {mcpAudit.data.servers.map((s) => (
-              <li key={s.serverId} className="small">
-                <span className="mono">{s.serverName}</span>
-                {s.allowlistEnforced ? '' : '（白名单未强制执行——引擎不支持按工具过滤）'}
-                {s.toolStats ? (
-                  <span>
-                    {' '}
-                    调用统计：
-                    {Object.entries(s.toolStats)
-                      .map(([tool, v]) => `${tool} ${v.calls}次/失败${v.failures}`)
-                      .join('，')}
-                  </span>
-                ) : (
-                  <span className="muted">（引擎未上报工具统计）</span>
-                )}
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+      {((mcpAudit.data && mcpAudit.data.servers.length > 0) ||
+        (memoryAudit.data && memoryAudit.data.count > 0)) && (
+        <div className="audit-grid">
+          {mcpAudit.data && mcpAudit.data.servers.length > 0 && (
+            <section className="card" aria-labelledby="task-mcp-title">
+              <h2 id="task-mcp-title">MCP 注入审计</h2>
+              <ul className="audit-list">
+                {mcpAudit.data.servers.map((s) => (
+                  <li key={s.serverId} className="small">
+                    <span className="mono">{s.serverName}</span>
+                    {s.allowlistEnforced ? '' : '（白名单未强制执行——引擎不支持按工具过滤）'}
+                    {s.toolStats ? (
+                      <span>
+                        {' '}
+                        调用统计：
+                        {Object.entries(s.toolStats)
+                          .map(([tool, v]) => `${tool} ${v.calls}次/失败${v.failures}`)
+                          .join('，')}
+                      </span>
+                    ) : (
+                      <span className="muted">（引擎未上报工具统计）</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
 
-      {memoryAudit.data && memoryAudit.data.count > 0 && (
-        <section className="card" aria-labelledby="task-memory-title">
-          <h2 id="task-memory-title">注入的项目记忆（{memoryAudit.data.count} 条）</h2>
-          <ul>
-            {memoryAudit.data.entries.map((m) => (
-              <li key={m.id} className="small">
-                <span className="tag">{m.kind}</span> {m.title}
-                {m.scope ? <span className="muted">（{m.scope}）</span> : null}
-              </li>
-            ))}
-          </ul>
-        </section>
+          {memoryAudit.data && memoryAudit.data.count > 0 && (
+            <section className="card" aria-labelledby="task-memory-title">
+              <h2 id="task-memory-title">注入的项目记忆（{memoryAudit.data.count} 条）</h2>
+              <ul className="audit-list">
+                {memoryAudit.data.entries.map((m) => (
+                  <li key={m.id} className="small">
+                    <span className="tag">{m.kind}</span> {m.title}
+                    {m.scope ? <span className="muted">（{m.scope}）</span> : null}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+        </div>
       )}
       <dialog
         ref={feedbackDialog}

@@ -134,7 +134,10 @@ export function ProvidersPage() {
   return (
     <div>
       <div className="page-head">
-        <h1>LLM Provider</h1>
+        <div className="page-title-group">
+          <h1>LLM Provider</h1>
+          <p className="page-subtitle">管理大模型服务商地址、API 协议及全局默认评审模型</p>
+        </div>
       </div>
 
       <div className="split providers-split">
@@ -147,6 +150,7 @@ export function ProvidersPage() {
                 id={ids.name}
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
+                placeholder="例如：内部 Claude 网关"
                 required
               />
             </label>
@@ -160,30 +164,32 @@ export function ProvidersPage() {
                 required
               />
             </label>
-            <label htmlFor={ids.model}>
-              模型名
-              <input
-                id={ids.model}
-                value={form.model}
-                onChange={(e) => setForm({ ...form, model: e.target.value })}
-                placeholder="例如：gpt-4o / claude-sonnet"
-                required
-              />
-            </label>
-            <label htmlFor={ids.protocol}>
-              协议
-              <select
-                id={ids.protocol}
-                value={form.protocol}
-                onChange={(e) => setForm({ ...form, protocol: e.target.value })}
-              >
-                {PROTOCOLS.map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="two-col">
+              <label htmlFor={ids.model}>
+                模型名
+                <input
+                  id={ids.model}
+                  value={form.model}
+                  onChange={(e) => setForm({ ...form, model: e.target.value })}
+                  placeholder="gpt-4o / claude-sonnet"
+                  required
+                />
+              </label>
+              <label htmlFor={ids.protocol}>
+                协议
+                <select
+                  id={ids.protocol}
+                  value={form.protocol}
+                  onChange={(e) => setForm({ ...form, protocol: e.target.value })}
+                >
+                  {PROTOCOLS.map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
             <label htmlFor={ids.apiKey}>
               API Key
               <input

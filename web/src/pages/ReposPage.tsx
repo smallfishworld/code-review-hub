@@ -191,7 +191,10 @@ export function ReposPage() {
   return (
     <div>
       <div className="page-head">
-        <h1>仓库管理</h1>
+        <div className="page-title-group">
+          <h1>仓库管理</h1>
+          <p className="page-subtitle">管理 SVN 与 Git 代码库连接、并发上限及优先评审模型池</p>
+        </div>
         <button type="button" className="secondary" onClick={startCreate}>
           新增仓库
         </button>
@@ -201,17 +204,37 @@ export function ReposPage() {
         <section className="card" aria-labelledby="repo-form-title">
           <h2 id="repo-form-title">{editingId === null ? '新增仓库' : '编辑仓库'}</h2>
           <form className="form" onSubmit={save} aria-describedby={ids.hint}>
-            <label htmlFor={ids.type}>
-              类型
-              <select
-                id={ids.type}
-                value={form.type}
-                onChange={(e) => setForm({ ...form, type: e.target.value as 'svn' | 'git' })}
-              >
-                <option value="svn">SVN</option>
-                <option value="git">Git</option>
-              </select>
-            </label>
+            <div className="two-col">
+              <label htmlFor={ids.type}>
+                类型
+                <select
+                  id={ids.type}
+                  value={form.type}
+                  onChange={(e) => setForm({ ...form, type: e.target.value as 'svn' | 'git' })}
+                >
+                  <option value="svn">SVN</option>
+                  <option value="git">Git</option>
+                </select>
+              </label>
+              <label htmlFor={ids.reviewConcurrency}>
+                评审并发数（必填）
+                <input
+                  id={ids.reviewConcurrency}
+                  name="reviewConcurrency"
+                  type="number"
+                  min={1}
+                  max={Number.MAX_SAFE_INTEGER}
+                  step={1}
+                  required
+                  aria-describedby={ids.reviewConcurrencyHint}
+                  value={form.reviewConcurrency}
+                  onChange={(e) => setForm({ ...form, reviewConcurrency: e.target.value })}
+                />
+              </label>
+            </div>
+            <p className="muted small form-hint" id={ids.reviewConcurrencyHint}>
+              同一仓库同时运行的评审任务数。设为 1 时串行，实际并发还受实例上限约束。
+            </p>
             <label htmlFor={ids.name}>
               名称
               <input
@@ -234,26 +257,6 @@ export function ReposPage() {
                 required
               />
             </label>
-            <label htmlFor={ids.username}>
-              用户名（可选）
-              <input
-                id={ids.username}
-                value={form.username}
-                onChange={(e) => setForm({ ...form, username: e.target.value })}
-                autoComplete="off"
-              />
-            </label>
-            <label htmlFor={ids.password}>
-              {form.type === 'svn' ? '密码' : '密码 / 访问令牌'}
-              <input
-                id={ids.password}
-                type="password"
-                value={form.password}
-                onChange={(e) => setForm({ ...form, password: e.target.value })}
-                placeholder={editingId === null ? '' : '留空表示不修改'}
-                autoComplete="new-password"
-              />
-            </label>
             {form.type === 'git' && (
               <label htmlFor={ids.branch}>
                 监控分支
@@ -264,24 +267,28 @@ export function ReposPage() {
                 />
               </label>
             )}
-            <label htmlFor={ids.reviewConcurrency}>
-              评审并发数（必填）
-              <input
-                id={ids.reviewConcurrency}
-                name="reviewConcurrency"
-                type="number"
-                min={1}
-                max={Number.MAX_SAFE_INTEGER}
-                step={1}
-                required
-                aria-describedby={ids.reviewConcurrencyHint}
-                value={form.reviewConcurrency}
-                onChange={(e) => setForm({ ...form, reviewConcurrency: e.target.value })}
-              />
-            </label>
-            <p className="muted small" id={ids.reviewConcurrencyHint}>
-              同一仓库同时运行的评审任务数。设为 1 时串行，实际并发还受实例上限约束。
-            </p>
+            <div className="two-col">
+              <label htmlFor={ids.username}>
+                用户名（可选）
+                <input
+                  id={ids.username}
+                  value={form.username}
+                  onChange={(e) => setForm({ ...form, username: e.target.value })}
+                  autoComplete="off"
+                />
+              </label>
+              <label htmlFor={ids.password}>
+                {form.type === 'svn' ? '密码' : '密码 / 访问令牌'}
+                <input
+                  id={ids.password}
+                  type="password"
+                  value={form.password}
+                  onChange={(e) => setForm({ ...form, password: e.target.value })}
+                  placeholder={editingId === null ? '' : '留空表示不修改'}
+                  autoComplete="new-password"
+                />
+              </label>
+            </div>
             <fieldset className="provider-pool" aria-describedby={ids.providerHint}>
               <legend>评审模型（可多选）</legend>
               <p className="muted small" id={ids.providerHint}>
@@ -379,7 +386,7 @@ export function ReposPage() {
           {repos.data && repos.data.length === 0 && <p className="muted">暂无仓库，请先新增。</p>}
           {repos.data && repos.data.length > 0 && (
             <div className="table-wrap">
-              <table className="table compact">
+              <table className="table">
                 <caption className="visually-hidden">已配置的仓库</caption>
                 <thead>
                   <tr>
@@ -389,7 +396,9 @@ export function ReposPage() {
                     <th scope="col">凭据</th>
                     <th scope="col">初始化</th>
                     <th scope="col">状态</th>
-                    <th scope="col">操作</th>
+                    <th scope="col" className="actions-cell">
+                      操作
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -430,7 +439,7 @@ export function ReposPage() {
                         <span className={repo.enabled ? 'dot ok' : 'dot off'} />
                         {repo.enabled ? '启用' : '停用'}
                       </td>
-                      <td className="nowrap">
+                      <td className="actions-cell">
                         <div className="row-actions">
                           <button type="button" className="link" onClick={() => startEdit(repo)}>
                             编辑<span className="visually-hidden">仓库 {repo.name}</span>

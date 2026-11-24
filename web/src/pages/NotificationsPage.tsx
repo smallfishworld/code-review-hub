@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { Fragment, useId, useState } from 'react';
 import { api, type Channel, type NotificationLog } from '../api/client';
 import { errorText, useApi, usePageTitle } from '../api/hooks';
 import { useConfirm } from '../components/ConfirmDialog';
@@ -230,7 +230,10 @@ export function NotificationsPage() {
   return (
     <div>
       <div className="page-head">
-        <h1>通知配置</h1>
+        <div className="page-title-group">
+          <h1>通知配置</h1>
+          <p className="page-subtitle">配置邮件与群机器人 Webhook 通知渠道及评审完成推送规则</p>
+        </div>
         <div className="actions">
           <button type="button" className="secondary" onClick={() => startCreate('email')}>
             新增邮件渠道
@@ -241,8 +244,11 @@ export function NotificationsPage() {
         </div>
       </div>
 
-      <section className="card" aria-labelledby="trigger-rule-title">
-        <h2 id="trigger-rule-title">触发规则</h2>
+      <section className="card trigger-rule-card" aria-labelledby="trigger-rule-title">
+        <div className="trigger-rule-head">
+          <h2 id="trigger-rule-title">触发规则</h2>
+          <span className="muted small">决定评审任务在何种结束状态下推送通知</span>
+        </div>
         <fieldset className="radio-row">
           <legend className="visually-hidden">通知触发规则</legend>
           {(
@@ -414,112 +420,124 @@ export function NotificationsPage() {
           </form>
         </section>
 
-        <section className="card grow" aria-labelledby="channel-list-title">
-          <h2 id="channel-list-title">渠道列表</h2>
-          {channels.data && channels.data.length === 0 && <p className="muted">暂无通知渠道。</p>}
-          {channels.data && channels.data.length > 0 && (
-            <div className="table-wrap">
-              <table className="table">
-                <caption className="visually-hidden">通知渠道列表</caption>
-                <thead>
-                  <tr>
-                    <th scope="col">名称</th>
-                    <th scope="col">类型</th>
-                    <th scope="col">配置</th>
-                    <th scope="col">状态</th>
-                    <th scope="col">操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {channels.data.map((c) => (
-                    <tr key={c.id}>
-                      <td>{c.name}</td>
-                      <td>
-                        <span className={`tag ${c.type}`}>{c.type === 'email' ? '邮件' : '机器人'}</span>
-                      </td>
-                      <td className="mono small ellipsis">
-                        {c.type === 'email'
-                          ? `${String(c.config.host ?? '')}:${String(c.config.port ?? '')}`
-                          : String(c.config.webhookUrl ?? '')}
-                      </td>
-                      <td>
-                        <span className={c.enabled ? 'dot ok' : 'dot off'} />
-                        {c.enabled ? '启用' : '停用'}
-                      </td>
-                      <td>
-                        <div className="row-actions">
-                          <button type="button" className="link" onClick={() => edit(c)}>
-                            编辑<span className="visually-hidden">渠道 {c.name}</span>
-                          </button>
-                          <button type="button" className="link" onClick={() => void test(c)}>
-                            发送测试<span className="visually-hidden">到渠道 {c.name}</span>
-                          </button>
-                          <button type="button" className="link" onClick={() => void toggle(c)}>
-                            {c.enabled ? '停用' : '启用'}
-                            <span className="visually-hidden">渠道 {c.name}</span>
-                          </button>
-                          <button
-                            type="button"
-                            className="link danger"
-                            onClick={() => void remove(c)}
-                          >
-                            删除<span className="visually-hidden">渠道 {c.name}</span>
-                          </button>
-                          {testResult[c.id] && (
-                            <div className="small muted" role="status">
-                              {testResult[c.id]}
+        <div className="grow stack">
+          <section className="card" aria-labelledby="channel-list-title">
+            <h2 id="channel-list-title">渠道列表</h2>
+            {channels.data && channels.data.length === 0 && <p className="muted">暂无通知渠道。</p>}
+            {channels.data && channels.data.length > 0 && (
+              <div className="table-wrap">
+                <table className="table">
+                  <caption className="visually-hidden">通知渠道列表</caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">名称</th>
+                      <th scope="col">类型</th>
+                      <th scope="col">配置</th>
+                      <th scope="col">状态</th>
+                      <th scope="col" className="actions-cell">
+                        操作
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {channels.data.map((c) => (
+                      <Fragment key={c.id}>
+                        <tr>
+                          <td>{c.name}</td>
+                          <td>
+                            <span className={`tag ${c.type}`}>{c.type === 'email' ? '邮件' : '机器人'}</span>
+                          </td>
+                          <td className="mono small ellipsis">
+                            {c.type === 'email'
+                              ? `${String(c.config.host ?? '')}:${String(c.config.port ?? '')}`
+                              : String(c.config.webhookUrl ?? '')}
+                          </td>
+                          <td className="nowrap">
+                            <span className={c.enabled ? 'dot ok' : 'dot off'} />
+                            {c.enabled ? '启用' : '停用'}
+                          </td>
+                          <td className="actions-cell">
+                            <div className="row-actions">
+                              <button type="button" className="link" onClick={() => edit(c)}>
+                                编辑<span className="visually-hidden">渠道 {c.name}</span>
+                              </button>
+                              <button type="button" className="link" onClick={() => void test(c)}>
+                                发送测试<span className="visually-hidden">到渠道 {c.name}</span>
+                              </button>
+                              <button type="button" className="link" onClick={() => void toggle(c)}>
+                                {c.enabled ? '停用' : '启用'}
+                                <span className="visually-hidden">渠道 {c.name}</span>
+                              </button>
+                              <button
+                                type="button"
+                                className="link danger"
+                                onClick={() => void remove(c)}
+                              >
+                                删除<span className="visually-hidden">渠道 {c.name}</span>
+                              </button>
                             </div>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+                          </td>
+                        </tr>
+                        {testResult[c.id] && (
+                          <tr className="test-row">
+                            <td colSpan={5}>
+                              <p className="test-result" role="status">
+                                {testResult[c.id]}
+                              </p>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
 
-          <h2>通知日志</h2>
-          <div className="actions">
-            <button type="button" className="secondary small" onClick={() => void logs.reload()}>
-              刷新日志
-            </button>
-          </div>
-          {logs.data && logs.data.length === 0 && <p className="muted">暂无通知记录。</p>}
-          {logs.data && logs.data.length > 0 && (
-            <div className="table-wrap">
-              <table className="table compact">
-                <caption className="visually-hidden">最近的通知发送记录</caption>
-                <thead>
-                  <tr>
-                    <th scope="col">任务</th>
-                    <th scope="col">渠道</th>
-                    <th scope="col">结果</th>
-                    <th scope="col">原因</th>
-                    <th scope="col">时间</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {logs.data.map((log) => (
-                    <tr key={log.id}>
-                      <td>#{log.taskId}</td>
-                      <td>
-                        {log.channelName ?? log.channelId}（{log.channelType ?? '—'}）
-                      </td>
-                      <td>
-                        <span className={log.status === 'sent' ? 'tag ok' : 'tag failed'}>
-                          {log.status === 'sent' ? '已发送' : '失败'}
-                        </span>
-                      </td>
-                      <td className="small muted">{log.detail ?? '—'}</td>
-                      <td className="small">{new Date(log.createdAt).toLocaleString()}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          <section className="card" aria-labelledby="notify-logs-title">
+            <div className="card-head">
+              <h2 id="notify-logs-title">通知日志</h2>
+              <button type="button" className="secondary small" onClick={() => void logs.reload()}>
+                刷新日志
+              </button>
             </div>
-          )}
-        </section>
+            {logs.data && logs.data.length === 0 && <p className="muted">暂无通知记录。</p>}
+            {logs.data && logs.data.length > 0 && (
+              <div className="table-wrap">
+                <table className="table compact">
+                  <caption className="visually-hidden">最近的通知发送记录</caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">任务</th>
+                      <th scope="col">渠道</th>
+                      <th scope="col">结果</th>
+                      <th scope="col">原因</th>
+                      <th scope="col">时间</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {logs.data.map((log) => (
+                      <tr key={log.id}>
+                        <td>#{log.taskId}</td>
+                        <td>
+                          {log.channelName ?? log.channelId}（{log.channelType ?? '—'}）
+                        </td>
+                        <td>
+                          <span className={log.status === 'sent' ? 'tag ok' : 'tag failed'}>
+                            {log.status === 'sent' ? '已发送' : '失败'}
+                          </span>
+                        </td>
+                        <td className="small muted">{log.detail ?? '—'}</td>
+                        <td className="small">{new Date(log.createdAt).toLocaleString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        </div>
       </div>
     </div>
   );

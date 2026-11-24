@@ -185,12 +185,14 @@ export function McpServersPage() {
   return (
     <div>
       <div className="page-head">
-        <h1>MCP 服务器</h1>
+        <div className="page-title-group">
+          <h1>MCP 服务器</h1>
+          <p className="page-subtitle">接入代码图谱与外部上下文工具，按全局或单仓库作用域注入评审流程</p>
+        </div>
       </div>
-      <p className="muted small" role="note">
-        ⚠️ 风险提示：MCP 服务器以平台服务账号的权限执行任意命令（stdio）或访问网络地址（http），
-        仅应添加可信来源的 MCP。配置中的 Authorization/token 等敏感值在页面回显时会被脱敏。
-      </p>
+      <div className="alert info" role="note">
+        风险提示：MCP 服务器以平台服务账号权限执行命令（stdio）或访问网络地址（http），仅应添加可信来源的 MCP。配置中的 Authorization / token 等敏感值在回显时自动脱敏。
+      </div>
 
       <div className="split providers-split">
         <ServerForm
@@ -254,41 +256,57 @@ function ServerForm(props: {
             id={ids.name}
             value={form.name}
             onChange={(e) => setForm({ ...form, name: e.target.value })}
+            placeholder="例如：codegraph"
             required
           />
         </label>
-        <label htmlFor={ids.transport}>
-          传输类型
-          <select
-            id={ids.transport}
-            value={form.transport}
-            onChange={(e) => setForm({ ...form, transport: e.target.value as 'stdio' | 'http' })}
-          >
-            <option value="stdio">stdio（本地命令）</option>
-            <option value="http">http（远程地址）</option>
-          </select>
-        </label>
+        <div className="two-col">
+          <label htmlFor={ids.transport}>
+            传输类型
+            <select
+              id={ids.transport}
+              value={form.transport}
+              onChange={(e) => setForm({ ...form, transport: e.target.value as 'stdio' | 'http' })}
+            >
+              <option value="stdio">stdio（本地命令）</option>
+              <option value="http">http（远程地址）</option>
+            </select>
+          </label>
+          <label htmlFor={ids.timeoutSec}>
+            超时秒数
+            <input
+              id={ids.timeoutSec}
+              type="number"
+              min={1}
+              max={600}
+              value={form.timeoutSec}
+              onChange={(e) => setForm({ ...form, timeoutSec: Number(e.target.value) || 10 })}
+            />
+          </label>
+        </div>
         {form.transport === 'stdio' ? (
           <>
-            <label htmlFor={ids.command}>
-              启动命令
-              <input
-                id={ids.command}
-                value={form.command}
-                onChange={(e) => setForm({ ...form, command: e.target.value })}
-                placeholder="例如：codegraph"
-                required
-              />
-            </label>
-            <label htmlFor={ids.args}>
-              参数（空格分隔）
-              <input
-                id={ids.args}
-                value={form.args}
-                onChange={(e) => setForm({ ...form, args: e.target.value })}
-                placeholder="例如：serve --mcp"
-              />
-            </label>
+            <div className="two-col">
+              <label htmlFor={ids.command}>
+                启动命令
+                <input
+                  id={ids.command}
+                  value={form.command}
+                  onChange={(e) => setForm({ ...form, command: e.target.value })}
+                  placeholder="例如：codegraph"
+                  required
+                />
+              </label>
+              <label htmlFor={ids.args}>
+                参数（空格分隔）
+                <input
+                  id={ids.args}
+                  value={form.args}
+                  onChange={(e) => setForm({ ...form, args: e.target.value })}
+                  placeholder="例如：serve --mcp"
+                />
+              </label>
+            </div>
             <label htmlFor={ids.env}>
               环境变量（JSON，可选）
               <input
@@ -322,35 +340,37 @@ function ServerForm(props: {
             </label>
           </>
         )}
-        <label htmlFor={ids.scope}>
-          作用域
-          <select
-            id={ids.scope}
-            value={form.scope}
-            onChange={(e) => setForm({ ...form, scope: e.target.value as 'global' | 'repo' })}
-          >
-            <option value="global">全局（所有仓库）</option>
-            <option value="repo">绑定单个仓库</option>
-          </select>
-        </label>
-        {form.scope === 'repo' && (
-          <label htmlFor={ids.repoId}>
-            绑定仓库
+        <div className="two-col">
+          <label htmlFor={ids.scope}>
+            作用域
             <select
-              id={ids.repoId}
-              value={form.repoId}
-              onChange={(e) => setForm({ ...form, repoId: e.target.value })}
-              required
+              id={ids.scope}
+              value={form.scope}
+              onChange={(e) => setForm({ ...form, scope: e.target.value as 'global' | 'repo' })}
             >
-              <option value="">请选择…</option>
-              {repos.map((r) => (
-                <option key={r.id} value={r.id}>
-                  #{r.id} {r.name}
-                </option>
-              ))}
+              <option value="global">全局（所有仓库）</option>
+              <option value="repo">绑定单个仓库</option>
             </select>
           </label>
-        )}
+          {form.scope === 'repo' && (
+            <label htmlFor={ids.repoId}>
+              绑定仓库
+              <select
+                id={ids.repoId}
+                value={form.repoId}
+                onChange={(e) => setForm({ ...form, repoId: e.target.value })}
+                required
+              >
+                <option value="">请选择…</option>
+                {repos.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    #{r.id} {r.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+        </div>
         <label htmlFor={ids.allowlist}>
           工具白名单（逗号分隔，可选）
           <input
@@ -358,17 +378,6 @@ function ServerForm(props: {
             value={form.allowlist}
             onChange={(e) => setForm({ ...form, allowlist: e.target.value })}
             placeholder="留空 = 不限制；ocr 引擎不支持过滤时仅审计标注"
-          />
-        </label>
-        <label htmlFor={ids.timeoutSec}>
-          超时秒数
-          <input
-            id={ids.timeoutSec}
-            type="number"
-            min={1}
-            max={600}
-            value={form.timeoutSec}
-            onChange={(e) => setForm({ ...form, timeoutSec: Number(e.target.value) || 10 })}
           />
         </label>
         <div className="actions">

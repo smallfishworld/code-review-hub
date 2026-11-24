@@ -1,5 +1,5 @@
 import { useId, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { api, type MemoryEntry, type MemoryList } from '../api/client';
 import { errorText, useApi, usePageTitle } from '../api/hooks';
 import { useConfirm } from '../components/ConfirmDialog';
@@ -149,7 +149,15 @@ export function RepoMemoryPage() {
   return (
     <div>
       <div className="page-head">
-        <h1>项目记忆（仓库 #{repoId}）</h1>
+        <div className="page-title-group">
+          <Link to="/repos" className="back-link">
+            ← 返回仓库管理
+          </Link>
+          <h1>项目记忆（仓库 #{repoId}）</h1>
+          <p className="page-subtitle">
+            随评审自动蒸馏与误报沉淀，也可手工维护（data/memory/{repoId}/ 编辑后重载生效，预算 1500 token）
+          </p>
+        </div>
         <div className="row-actions">
           <button type="button" className="secondary" onClick={() => void reloadMarkdown()}>
             重载 markdown
@@ -164,30 +172,44 @@ export function RepoMemoryPage() {
           </button>
         </div>
       </div>
-      <p className="muted small">
-        记忆随评审自动沉淀（LLM 蒸馏 + 误报反馈），也可手工维护；SQLite 为准，markdown（data/memory/{repoId}/）
-        为人工编辑入口，编辑后点「重载 markdown」生效。注入预算 1500 token，低置信度（&lt;0.3）条目不参与召回。
-        {!memory.data?.ftsAvailable && ' ⚠️ 当前环境 FTS5/trigram 不可用，全文检索降级为 LIKE。'}
-      </p>
+      {memory.data && !memory.data.ftsAvailable && (
+        <div className="alert info">
+          当前环境 FTS5/trigram 不可用，全文检索已自动降级为 LIKE。
+        </div>
+      )}
 
       <div className="split providers-split">
         <section className="card" aria-labelledby="memory-form-title">
           <h2 id="memory-form-title">{editingId === null ? '新增记忆' : '编辑记忆'}</h2>
           <form className="form" onSubmit={save}>
-            <label htmlFor={ids.kind}>
-              类型
-              <select
-                id={ids.kind}
-                value={form.kind}
-                onChange={(e) => setForm({ ...form, kind: e.target.value as MemoryEntry['kind'] })}
-              >
-                {Object.entries(KIND_LABEL).map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="two-col">
+              <label htmlFor={ids.kind}>
+                类型
+                <select
+                  id={ids.kind}
+                  value={form.kind}
+                  onChange={(e) => setForm({ ...form, kind: e.target.value as MemoryEntry['kind'] })}
+                >
+                  {Object.entries(KIND_LABEL).map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label htmlFor={ids.confidence}>
+                置信度（0.01–0.99）
+                <input
+                  id={ids.confidence}
+                  type="number"
+                  step="0.01"
+                  min={0.01}
+                  max={0.99}
+                  value={form.confidence}
+                  onChange={(e) => setForm({ ...form, confidence: Number(e.target.value) })}
+                />
+              </label>
+            </div>
             <label htmlFor={ids.scope}>
               作用范围（路径前缀，可选）
               <input
@@ -216,18 +238,6 @@ export function RepoMemoryPage() {
                 required
               />
             </label>
-            <label htmlFor={ids.confidence}>
-              置信度（0.01–0.99）
-              <input
-                id={ids.confidence}
-                type="number"
-                step="0.01"
-                min={0.01}
-                max={0.99}
-                value={form.confidence}
-                onChange={(e) => setForm({ ...form, confidence: Number(e.target.value) })}
-              />
-            </label>
             <div className="actions">
               <button className="primary" type="submit" disabled={busy}>
                 保存
@@ -248,7 +258,7 @@ export function RepoMemoryPage() {
           </form>
         </section>
 
-        <div className="grow">
+        <div className="grow stack">
           <section className="card" aria-labelledby="memory-list-title">
             <h2 id="memory-list-title">记忆条目</h2>
             {memory.data && memory.data.items.length === 0 && (
@@ -315,7 +325,7 @@ export function RepoMemoryPage() {
           <section className="card" aria-labelledby="memory-preview-title">
             <h2 id="memory-preview-title">注入预览</h2>
             <p className="muted small">下一次评审将注入的记忆内容（按得分排序、预算截断后）。</p>
-            <pre className="mono small">{preview.data?.text || '（无可注入内容）'}</pre>
+            <pre className="raw">{preview.data?.text || '（无可注入内容）'}</pre>
           </section>
         </div>
       </div>

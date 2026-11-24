@@ -30,12 +30,17 @@ export function LoginPage() {
   return (
     <div className="login-wrap">
       <form className="card login-card" onSubmit={submit} aria-labelledby="login-title">
-        <h1 id="login-title">代码评审平台</h1>
-        <p className="muted">
-          {status?.loginRequired
-            ? '请输入管理员口令登录'
-            : '当前未设置管理员口令（首次使用请登录后设置）'}
-        </p>
+        <div className="login-brand">
+          <span className="brand-mark" aria-hidden="true" />
+          <div>
+            <h1 id="login-title">代码评审平台</h1>
+            <p className="muted small">
+              {status?.loginRequired
+                ? '请输入管理员口令登录控制台'
+                : '当前未设置管理员口令（首次使用请登录后设置）'}
+            </p>
+          </div>
+        </div>
         <label htmlFor={ids.username}>
           用户名
           <input

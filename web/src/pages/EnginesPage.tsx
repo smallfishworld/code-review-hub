@@ -75,30 +75,39 @@ export function EnginesPage() {
   return (
     <div>
       <div className="page-head">
-        <h1>评审引擎</h1>
+        <div className="page-title-group">
+          <h1>评审引擎</h1>
+          <p className="page-subtitle">
+            按「监控规则 → 仓库 → 全局默认」三级优先级解析；停用的引擎不回退，任务将失败并写明原因
+          </p>
+        </div>
       </div>
-      <p className="muted small">
-        引擎按 监控规则 → 仓库 → 全局默认 三级优先级选择；停用的引擎不会被任务解析（不回退，任务将失败并写明原因）。
-      </p>
 
       <div className="split providers-split">
         <section className="card" aria-labelledby="engine-form-title">
           <h2 id="engine-form-title">新增引擎</h2>
           <form className="form" onSubmit={create}>
-            <label>
-              名称
-              <input value={name} onChange={(e) => setName(e.target.value)} required />
-            </label>
-            <label>
-              类型
-              <select value={kind} onChange={(e) => setKind(e.target.value)}>
-                {KINDS.map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="two-col">
+              <label>
+                名称
+                <input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="例如：ocr-default"
+                  required
+                />
+              </label>
+              <label>
+                类型
+                <select value={kind} onChange={(e) => setKind(e.target.value)}>
+                  {KINDS.map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
             <div className="actions">
               <button className="primary" type="submit" disabled={busy}>
                 保存

@@ -119,7 +119,10 @@ export function MonitorPage() {
   return (
     <div>
       <div className="page-head">
-        <h1>监控规则</h1>
+        <div className="page-title-group">
+          <h1>监控规则</h1>
+          <p className="page-subtitle">配置仓库定时轮询策略、作者白名单与路径前缀自动触发代码评审</p>
+        </div>
         <button type="button" className="secondary" onClick={() => void rules.reload()}>
           刷新状态
         </button>
@@ -150,18 +153,33 @@ export function MonitorPage() {
                   ))}
                 </select>
               </label>
-              <label htmlFor={ids.interval}>
-                轮询间隔（秒，≥30）
-                <input
-                  id={ids.interval}
-                  type="number"
-                  min={30}
-                  value={form.intervalSeconds}
-                  onChange={(e) =>
-                    setForm({ ...form, intervalSeconds: Number(e.target.value) })
-                  }
-                />
-              </label>
+              <div className="two-col">
+                <label htmlFor={ids.interval}>
+                  轮询间隔（秒，≥30）
+                  <input
+                    id={ids.interval}
+                    type="number"
+                    min={30}
+                    value={form.intervalSeconds}
+                    onChange={(e) =>
+                      setForm({ ...form, intervalSeconds: Number(e.target.value) })
+                    }
+                  />
+                </label>
+                <label htmlFor={ids.backtrack}>
+                  首次回溯节点数
+                  <input
+                    id={ids.backtrack}
+                    type="number"
+                    min={0}
+                    value={form.backtrackNodes}
+                    onChange={(e) => setForm({ ...form, backtrackNodes: Number(e.target.value) })}
+                  />
+                </label>
+              </div>
+              <p className="muted small form-hint">
+                首次启用监控时向前回溯历史提交数，设为 0 表示仅从当前最新节点开始。
+              </p>
               <label htmlFor={ids.authors}>
                 上库人员白名单（每行一个，留空不过滤）
                 <textarea
@@ -180,16 +198,6 @@ export function MonitorPage() {
                   value={form.pathPrefixes}
                   onChange={(e) => setForm({ ...form, pathPrefixes: e.target.value })}
                   placeholder={'trunk/src/\nsrc/main/'}
-                />
-              </label>
-              <label htmlFor={ids.backtrack}>
-                回溯节点数（首次启用时向前回溯，0 表示从最新节点开始）
-                <input
-                  id={ids.backtrack}
-                  type="number"
-                  min={0}
-                  value={form.backtrackNodes}
-                  onChange={(e) => setForm({ ...form, backtrackNodes: Number(e.target.value) })}
                 />
               </label>
               {repo?.type === 'git' && (
@@ -240,7 +248,7 @@ export function MonitorPage() {
             {!currentRule && <p className="muted">该仓库尚未配置监控规则。</p>}
             {currentRule && status && (
               <>
-                <div className="stat-grid">
+                <div className="stat-grid cols-3">
                   <div className="stat">
                     <span className="stat-label">状态</span>
                     <span className={currentRule.enabled ? 'stat-value ok' : 'stat-value off'}>
