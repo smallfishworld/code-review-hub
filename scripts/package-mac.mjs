@@ -8,7 +8,7 @@
  * darwin ocr native binary). The result is a directory (and a .tar.gz next
  * to it) that runs with no pre-installed Node, npm or ocr:
  *
- *   codereview-hub/
+ *   code-review-hub/
  *     bin/node                  bundled Node runtime
  *     start.command             double-click launcher (Finder-openable)
  *     start.sh                  terminal launcher / launchd target
@@ -47,7 +47,7 @@ const opt = (name, fallback) => {
 };
 
 const OUT_ROOT = resolve(opt('--out', join(ROOT, 'dist-mac')));
-const PKG_NAME = 'codereview-hub';
+const PKG_NAME = 'code-review-hub';
 const PKG_DIR = join(OUT_ROOT, PKG_NAME);
 const ARCH = opt('--arch', process.arch === 'arm64' ? 'arm64' : 'x64');
 const MAKE_ZIP = !flag('--no-zip');

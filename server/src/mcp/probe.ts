@@ -78,7 +78,7 @@ async function probeStdio(config: Record<string, unknown>, timeoutMs: number): P
     jsonRpcLine(1, 'initialize', {
       protocolVersion: MCP_PROTOCOL_VERSION,
       capabilities: {},
-      clientInfo: { name: 'codereview-hub', version: '1.0' },
+      clientInfo: { name: 'code-review-hub', version: '1.0' },
     }) +
     `${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n` +
     jsonRpcLine(2, 'tools/list', {});
@@ -163,7 +163,7 @@ async function probeHttp(config: Record<string, unknown>, timeoutMs: number): Pr
       params: {
         protocolVersion: MCP_PROTOCOL_VERSION,
         capabilities: {},
-        clientInfo: { name: 'codereview-hub', version: '1.0' },
+        clientInfo: { name: 'code-review-hub', version: '1.0' },
       },
     });
     if (init.error) {

@@ -1,4 +1,4 @@
-# codereview-hub Web 控制台
+# code-review-hub Web 控制台
 
 基于 React 19 + TypeScript + Vite 的单页应用，由服务端（`server/`）直接托管构建产物（`web/dist/`）。
 

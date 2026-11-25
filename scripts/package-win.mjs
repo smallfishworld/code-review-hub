@@ -7,7 +7,7 @@
  * The result is a directory (and a .zip next to it) that runs with no
  * pre-installed Node, npm, ocr or SVN:
  *
- *   codereview-hub/
+ *   code-review-hub/
  *     node.exe                  bundled Node runtime
  *     start.cmd                 double-click launcher
  *     server/                   compiled server
@@ -46,7 +46,7 @@ const opt = (name, fallback) => {
 };
 
 const OUT_ROOT = resolve(opt('--out', join(ROOT, 'dist-win')));
-const PKG_NAME = 'codereview-hub';
+const PKG_NAME = 'code-review-hub';
 const PKG_DIR = join(OUT_ROOT, PKG_NAME);
 const WITH_SVN = opt('--with-svn', '');
 const MAKE_ZIP = !flag('--no-zip');

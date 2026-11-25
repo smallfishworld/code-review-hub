@@ -1,4 +1,4 @@
-# codereview-hub（自动化代码评审平台）
+# code-review-hub（自动化代码评审平台）
 
 基于 [`ocr`](https://github.com/smallfishworld/open-code-review-svn)（open-code-review 的 SVN fork）构建的自动化代码评审平台：对 **SVN / Git** 仓库上库的每个节点（revision / commit）调用评审引擎做 AI 评审，支持手动触发单节点 / 区间评审、按人员与路径过滤的自动监控、评审报告浏览，以及邮件 / 聊天机器人通知。
 
@@ -75,7 +75,7 @@ node -v                      # 需 >= 20
 npm install -g @smallfishworld/open-code-review-svn@1.13.8-svn.1
 
 # 2) 获取代码并安装依赖
-cd /opt/codereview-hub
+cd /opt/code-review-hub
 npm ci
 npm --prefix web ci
 
@@ -83,7 +83,7 @@ npm --prefix web ci
 npm run build
 
 # 4) 启动
-PORT=3000 DATA_DIR=/var/lib/codereview-hub npm start
+PORT=3000 DATA_DIR=/var/lib/code-review-hub npm start
 ```
 
 浏览器访问 `http://<服务器地址>:3000`。
@@ -98,7 +98,7 @@ winget install Git.Git
 npm install -g @smallfishworld/open-code-review-svn@1.13.8-svn.1
 
 # 2) 获取代码并安装依赖
-cd D:\code\codereview-hub
+cd D:\code\code-review-hub
 npm ci
 npm --prefix web ci
 
@@ -106,7 +106,7 @@ npm --prefix web ci
 npm run build
 
 # 4) 启动
-$env:PORT="3000"; $env:DATA_DIR="D:\code\codereview-hub\data"; npm start
+$env:PORT="3000"; $env:DATA_DIR="D:\code\code-review-hub\data"; npm start
 ```
 
 浏览器访问 `http://127.0.0.1:3000`。
@@ -121,7 +121,7 @@ brew install node subversion     # 或从 nodejs.org 安装 Node >= 20
 npm install -g @smallfishworld/open-code-review-svn@1.13.8-svn.1
 
 # 2) 获取代码并安装依赖
-cd /opt/codereview-hub
+cd /opt/code-review-hub
 npm ci
 npm --prefix web ci
 
@@ -129,12 +129,12 @@ npm --prefix web ci
 npm run build
 
 # 4) 启动
-PORT=3000 DATA_DIR=/var/lib/codereview-hub npm start
+PORT=3000 DATA_DIR=/var/lib/code-review-hub npm start
 ```
 
 浏览器访问 `http://127.0.0.1:3000`。
 
-免安装打包（用与目标架构一致的 Node 在 macOS 上执行，产物为 `dist-mac/codereview-hub-macos-<arch>-v*.tar.gz`，内置 Node、ocr 与 CodeGraph，SVN 需目标机 `brew install subversion`）：
+免安装打包（用与目标架构一致的 Node 在 macOS 上执行，产物为 `dist-mac/code-review-hub-macos-<arch>-v*.tar.gz`，内置 Node、ocr 与 CodeGraph，SVN 需目标机 `brew install subversion`）：
 
 ```bash
 node scripts/package-mac.mjs [--arch arm64|x64]
@@ -311,7 +311,7 @@ BASE_URL=http://127.0.0.1:3000 node scripts/smoke.mjs
 
 # 由脚本自己启动/重启服务（覆盖第 10 阶段）
 SMOKE_SERVER_CMD="node server/dist/index.js" \
-SMOKE_SERVER_CWD=/opt/codereview-hub \
+SMOKE_SERVER_CWD=/opt/code-review-hub \
 SMOKE_DATA_DIR=/tmp/crp-smoke/data \
 SMOKE_DIR=/tmp/crp-smoke/scratch \
 BASE_URL=http://127.0.0.1:3996 \
@@ -322,7 +322,7 @@ node scripts/smoke.mjs
 # Windows
 $env:PATH="D:\tools\svn-1.14.5\bin;$env:PATH"
 $env:SMOKE_SERVER_CMD="node server/dist/index.js"
-$env:SMOKE_SERVER_CWD="D:\code\codereview-hub"
+$env:SMOKE_SERVER_CWD="D:\code\code-review-hub"
 $env:SMOKE_DATA_DIR="D:\tmp\crp-smoke\data"
 $env:SMOKE_DIR="D:\tmp\crp-smoke\scratch"
 $env:BASE_URL="http://127.0.0.1:3997"

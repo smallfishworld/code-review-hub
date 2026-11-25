@@ -1,5 +1,5 @@
 {
-  "name": "codereview-hub",
+  "name": "code-review-hub",
   "version": "0.1.0",
   "private": true,
   "description": "Automated AI code review platform for SVN/Git repositories, built on the ocr CLI",
