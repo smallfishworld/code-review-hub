@@ -9,6 +9,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { useI18n } from '../i18n';
 
 export interface FlashMessage {
   kind: 'ok' | 'error';
@@ -61,6 +62,7 @@ export function useFlash(): FlashState {
  * errors stay until dismissed.
  */
 function ToastRegion({ flash, onDismiss }: { flash: FlashMessage | null; onDismiss: () => void }) {
+  const { t } = useI18n();
   const regionId = useId();
   const ref = useRef<HTMLDivElement>(null);
   const liveRef = useRef<HTMLParagraphElement>(null);
@@ -123,13 +125,13 @@ function ToastRegion({ flash, onDismiss }: { flash: FlashMessage | null; onDismi
         id={regionId}
         popover="manual"
         role="region"
-        aria-label="通知"
+        aria-label={t('toast.regionLabel')}
         className="toast-region"
       >
         {flash && (
           <div className={`toast ${flash.kind}`}>
             <span className="toast-text">{flash.text}</span>
-            <button type="button" className="toast-close" aria-label="关闭通知" onClick={onDismiss}>
+            <button type="button" className="toast-close" aria-label={t('toast.close')} onClick={onDismiss}>
               ×
             </button>
           </div>

@@ -3,6 +3,7 @@ import { api, type Provider } from '../api/client';
 import { errorText, useApi, usePageTitle } from '../api/hooks';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useFlash } from '../components/Toast';
+import { useI18n } from '../i18n';
 
 interface FormState {
   name: string;
@@ -34,7 +35,8 @@ const PROTOCOLS = [
 ];
 
 export function ProvidersPage() {
-  usePageTitle('LLM Provider');
+  const { t } = useI18n();
+  usePageTitle(t('providers.pageTitle'));
   const providers = useApi(() => api.get<Provider[]>('/api/providers'));
   const flash = useFlash();
   const confirm = useConfirm();
@@ -74,10 +76,10 @@ export function ProvidersPage() {
     try {
       if (editingId === null) {
         await api.post('/api/providers', payload);
-        flash.ok('Provider 已保存');
+        flash.ok(t('providers.toast.saved'));
       } else {
         await api.put(`/api/providers/${editingId}`, payload);
-        flash.ok('Provider 已更新');
+        flash.ok(t('providers.toast.updated'));
       }
       setForm(empty);
       setEditingId(null);
@@ -90,7 +92,10 @@ export function ProvidersPage() {
   };
 
   const test = async (p: Provider) => {
-    setTestResult((prev) => ({ ...prev, [p.id]: { kind: 'pending', text: '测试中…' } }));
+    setTestResult((prev) => ({
+      ...prev,
+      [p.id]: { kind: 'pending', text: t('providers.list.testing') },
+    }));
     try {
       const res = await api.post<{ ok: boolean; message: string }>(`/api/providers/${p.id}/test`);
       setTestResult((prev) => ({
@@ -105,7 +110,7 @@ export function ProvidersPage() {
   const makeDefault = async (p: Provider) => {
     try {
       await api.post(`/api/providers/${p.id}/default`);
-      flash.ok(`已将「${p.name}」设为默认评审 Provider`);
+      flash.ok(t('providers.toast.setDefault', { name: p.name }));
       await providers.reload();
     } catch (err) {
       flash.fail(errorText(err));
@@ -114,17 +119,17 @@ export function ProvidersPage() {
 
   const remove = async (p: Provider) => {
     const ok = await confirm({
-      title: `删除 Provider「${p.name}」？`,
+      title: t('providers.confirm.deleteTitle', { name: p.name }),
       body: p.isDefault
-        ? '这是当前的默认评审 Provider，删除后需重新指定一个，否则评审任务将无法执行。'
-        : '删除后无法恢复，已保存的 API Key 会一并删除。',
-      confirmLabel: '删除 Provider',
+        ? t('providers.confirm.deleteDefaultBody')
+        : t('providers.confirm.deleteBody'),
+      confirmLabel: t('providers.confirm.deleteButton'),
       danger: true,
     });
     if (!ok) return;
     try {
       await api.del(`/api/providers/${p.id}`);
-      flash.ok('Provider 已删除');
+      flash.ok(t('providers.toast.deleted'));
       await providers.reload();
     } catch (err) {
       flash.fail(errorText(err));
@@ -135,27 +140,29 @@ export function ProvidersPage() {
     <div>
       <div className="page-head">
         <div className="page-title-group">
-          <h1>LLM Provider</h1>
-          <p className="page-subtitle">管理大模型服务商地址、API 协议及全局默认评审模型</p>
+          <h1>{t('providers.pageTitle')}</h1>
+          <p className="page-subtitle">{t('providers.subtitle')}</p>
         </div>
       </div>
 
       <div className="split providers-split">
         <section className="card" aria-labelledby="provider-form-title">
-          <h2 id="provider-form-title">{editingId === null ? '新增 Provider' : '编辑 Provider'}</h2>
+          <h2 id="provider-form-title">
+            {editingId === null ? t('providers.form.createTitle') : t('providers.form.editTitle')}
+          </h2>
           <form className="form" onSubmit={save}>
             <label htmlFor={ids.name}>
-              名称
+              {t('common.name')}
               <input
                 id={ids.name}
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
-                placeholder="例如：内部 Claude 网关"
+                placeholder={t('providers.form.namePlaceholder')}
                 required
               />
             </label>
             <label htmlFor={ids.apiBase}>
-              API 地址
+              {t('providers.form.apiBase')}
               <input
                 id={ids.apiBase}
                 value={form.apiBase}
@@ -166,7 +173,7 @@ export function ProvidersPage() {
             </label>
             <div className="two-col">
               <label htmlFor={ids.model}>
-                模型名
+                {t('providers.form.model')}
                 <input
                   id={ids.model}
                   value={form.model}
@@ -176,7 +183,7 @@ export function ProvidersPage() {
                 />
               </label>
               <label htmlFor={ids.protocol}>
-                协议
+                {t('providers.form.protocol')}
                 <select
                   id={ids.protocol}
                   value={form.protocol}
@@ -191,19 +198,19 @@ export function ProvidersPage() {
               </label>
             </div>
             <label htmlFor={ids.apiKey}>
-              API Key
+              {t('providers.form.apiKey')}
               <input
                 id={ids.apiKey}
                 type="password"
                 value={form.apiKey}
                 onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
-                placeholder={editingId === null ? '' : '留空表示不修改'}
+                placeholder={editingId === null ? '' : t('common.leaveBlankUnchanged')}
                 autoComplete="new-password"
               />
             </label>
             <div className="actions">
               <button className="primary" type="submit" disabled={busy}>
-                保存
+                {t('common.save')}
               </button>
               {editingId !== null && (
                 <button
@@ -214,7 +221,7 @@ export function ProvidersPage() {
                     setForm(empty);
                   }}
                 >
-                  取消编辑
+                  {t('common.cancelEdit')}
                 </button>
               )}
             </div>
@@ -222,21 +229,23 @@ export function ProvidersPage() {
         </section>
 
         <section className="card grow" aria-labelledby="provider-list-title">
-          <h2 id="provider-list-title">Provider 列表</h2>
-          {providers.data && providers.data.length === 0 && <p className="muted">暂无 Provider。</p>}
+          <h2 id="provider-list-title">{t('providers.list.title')}</h2>
+          {providers.data && providers.data.length === 0 && (
+            <p className="muted">{t('providers.list.empty')}</p>
+          )}
           {providers.data && providers.data.length > 0 && (
             <div className="table-wrap">
               <table className="table">
-                <caption className="visually-hidden">LLM Provider 列表</caption>
+                <caption className="visually-hidden">{t('providers.list.caption')}</caption>
                 <thead>
                   <tr>
-                    <th scope="col">名称</th>
-                    <th scope="col">API 地址</th>
-                    <th scope="col">模型</th>
-                    <th scope="col">协议</th>
+                    <th scope="col">{t('common.name')}</th>
+                    <th scope="col">{t('providers.form.apiBase')}</th>
+                    <th scope="col">{t('providers.list.colModel')}</th>
+                    <th scope="col">{t('providers.form.protocol')}</th>
                     <th scope="col">Key</th>
                     <th scope="col" className="actions-cell">
-                      操作
+                      {t('common.actions')}
                     </th>
                   </tr>
                 </thead>
@@ -254,7 +263,7 @@ export function ProvidersPage() {
                             {p.model}
                             {p.isDefault && (
                               <span className="tag ok" style={{ marginLeft: 6 }}>
-                                默认
+                                {t('common.default')}
                               </span>
                             )}
                           </td>
@@ -263,7 +272,8 @@ export function ProvidersPage() {
                           <td className="actions-cell">
                             <div className="row-actions">
                               <button type="button" className="link" onClick={() => edit(p)}>
-                                编辑<span className="visually-hidden">Provider {p.name}</span>
+                                {t('common.edit')}
+                                <span className="visually-hidden">Provider {p.name}</span>
                               </button>
                               <button
                                 type="button"
@@ -271,7 +281,9 @@ export function ProvidersPage() {
                                 onClick={() => void test(p)}
                                 disabled={result?.kind === 'pending'}
                               >
-                                {result?.kind === 'pending' ? '测试中…' : '测试连接'}
+                                {result?.kind === 'pending'
+                                  ? t('providers.list.testing')
+                                  : t('providers.list.test')}
                                 <span className="visually-hidden">Provider {p.name}</span>
                               </button>
                               {!p.isDefault && (
@@ -280,7 +292,8 @@ export function ProvidersPage() {
                                   className="link"
                                   onClick={() => void makeDefault(p)}
                                 >
-                                  设为默认<span className="visually-hidden">Provider {p.name}</span>
+                                  {t('common.setDefault')}
+                                  <span className="visually-hidden">Provider {p.name}</span>
                                 </button>
                               )}
                               <button
@@ -288,14 +301,12 @@ export function ProvidersPage() {
                                 className="link danger"
                                 onClick={() => void remove(p)}
                               >
-                                删除<span className="visually-hidden">Provider {p.name}</span>
+                                {t('common.delete')}
+                                <span className="visually-hidden">Provider {p.name}</span>
                               </button>
                             </div>
                           </td>
                         </tr>
-                        {/* The test verdict gets its own full-width row: inside
-                            the action cell it competed with four links for a
-                            narrow column and wrapped into an unreadable stack. */}
                         {result && (
                           <tr className="test-row">
                             <td colSpan={6}>
@@ -306,11 +317,11 @@ export function ProvidersPage() {
                               >
                                 <span className="test-result-label">
                                   {result.kind === 'ok'
-                                    ? '成功'
+                                    ? t('providers.list.testOk')
                                     : result.kind === 'fail'
-                                      ? '失败'
-                                      : '测试中'}
-                                  ：
+                                      ? t('providers.list.testFail')
+                                      : t('providers.list.testPending')}
+                                  :{' '}
                                 </span>
                                 {result.text}
                               </p>

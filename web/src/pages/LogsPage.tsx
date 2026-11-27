@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, type LogFile, type LogLine, type LogLevel } from '../api/client';
 import { errorText, usePageTitle } from '../api/hooks';
+import { useI18n, type MessageKey } from '../i18n';
 
-const LEVELS: { value: LogLevel | ''; label: string }[] = [
-  { value: '', label: '全部级别' },
-  { value: 'debug', label: 'DEBUG 及以上' },
-  { value: 'info', label: 'INFO 及以上' },
-  { value: 'warn', label: 'WARN 及以上' },
-  { value: 'error', label: '仅 ERROR' },
+const LEVELS: { value: LogLevel | ''; labelKey: MessageKey }[] = [
+  { value: '', labelKey: 'logs.filter.allLevels' },
+  { value: 'debug', labelKey: 'logs.filter.debugUp' },
+  { value: 'info', labelKey: 'logs.filter.infoUp' },
+  { value: 'warn', labelKey: 'logs.filter.warnUp' },
+  { value: 'error', labelKey: 'logs.filter.errorOnly' },
 ];
 
 const SOURCES = ['', 'server', 'task', 'ocr', 'monitor', 'notify'];
@@ -21,7 +22,8 @@ const PAGE = 500;
  * downloads for full history.
  */
 export function LogsPage() {
-  usePageTitle('运行日志');
+  const { t } = useI18n();
+  usePageTitle(t('logs.pageTitle'));
   const [lines, setLines] = useState<LogLine[]>([]);
   const [total, setTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -35,8 +37,6 @@ export function LogsPage() {
 
   const scrollerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
-  // Latest filters for the polling interval without resetting it on change.
-  // Written from an effect (not render) to keep render pure.
   const filtersRef = useRef({ level, src, q });
   useEffect(() => {
     filtersRef.current = { level, src, q };
@@ -58,11 +58,6 @@ export function LogsPage() {
     }
   }, []);
 
-  // Poll while "live"; a paused view is a frozen snapshot (search applies to
-  // the frozen buffer, which is what an operator wants when copying an error).
-  // The first fetch fires immediately (no waiting one interval), then polling.
-  // (Data fetching in an effect is a legitimate external-system sync; the
-  // state writes all happen after await, never synchronously.)
   useEffect(() => {
     // oxlint-disable-next-line react/set-state-in-effect -- async fetch, setState lands after await
     void fetchOnce();
@@ -71,7 +66,6 @@ export function LogsPage() {
     return () => clearInterval(timer);
   }, [live, fetchOnce]);
 
-  // File list only changes when a day rolls over; refresh alongside polling.
   useEffect(() => {
     const load = () =>
       api
@@ -83,7 +77,6 @@ export function LogsPage() {
     return () => clearInterval(timer);
   }, []);
 
-  // Auto-follow: stick to the bottom on new lines unless the user scrolled up.
   useEffect(() => {
     if (!follow) return;
     bottomRef.current?.scrollIntoView({ block: 'end' });
@@ -92,7 +85,6 @@ export function LogsPage() {
   const onScroll = () => {
     const el = scrollerRef.current;
     if (!el) return;
-    // "At the bottom" with a small tolerance; scrolling up disengages follow.
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
     setFollow(atBottom);
   };
@@ -117,8 +109,8 @@ export function LogsPage() {
     <div className="logs-page">
       <div className="page-head">
         <div className="page-title-group">
-          <h1>运行日志</h1>
-          <p className="page-subtitle">实时追踪平台服务、监控轮询、评审引擎与通知投递日志</p>
+          <h1>{t('logs.pageTitle')}</h1>
+          <p className="page-subtitle">{t('logs.subtitle')}</p>
         </div>
         <div className="logs-toolbar">
           <label className="logs-live">
@@ -127,42 +119,40 @@ export function LogsPage() {
               checked={live}
               onChange={(e) => (e.target.checked ? resumeLive() : pauseLive())}
             />
-            实时刷新
+            {t('logs.liveRefresh')}
           </label>
           {!live && (
             <button type="button" className="secondary small" onClick={resumeLive}>
-              恢复实时
+              {t('logs.resumeLive')}
             </button>
           )}
         </div>
       </div>
 
-      <section className="card logs-console-card" aria-label="实时日志">
+      <section className="card logs-console-card" aria-label={t('logs.consoleAria')}>
         <div className="logs-console-bar">
           <div className="logs-filters">
             <label>
-              级别
+              {t('logs.filter.level')}
               <select
                 value={level}
                 onChange={(e) => {
                   setLevel(e.target.value as LogLevel | '');
                   if (live) return;
-                  // In paused mode the snapshot is frozen; changing filters just
-                  // re-filters the rendered list client-side (no refetch needed).
                 }}
                 disabled={!live}
               >
                 {LEVELS.map((l) => (
                   <option key={l.value} value={l.value}>
-                    {l.label}
+                    {t(l.labelKey)}
                   </option>
                 ))}
               </select>
             </label>
             <label>
-              来源
+              {t('logs.filter.source')}
               <select value={src} onChange={(e) => setSrc(e.target.value)} disabled={!live}>
-                <option value="">全部</option>
+                <option value="">{t('common.all')}</option>
                 {SOURCES.filter(Boolean).map((s) => (
                   <option key={s} value={s}>
                     {s}
@@ -171,20 +161,22 @@ export function LogsPage() {
               </select>
             </label>
             <label className="logs-search">
-              搜索
+              {t('logs.filter.search')}
               <input
                 type="search"
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
-                placeholder={live ? '输入关键字过滤…' : '暂停中：过滤当前快照'}
+                placeholder={live ? t('logs.filter.searchLive') : t('logs.filter.searchPaused')}
               />
             </label>
           </div>
           <div className="logs-status muted small">
             <span>
-              共 {lines.length} 行{total > lines.length ? `（缓冲区 ${total} 行，显示最新 ${PAGE} 行）` : ''}
+              {total > lines.length
+                ? t('logs.countBuffered', { shown: lines.length, total, page: PAGE })
+                : t('logs.count', { shown: lines.length })}
             </span>
-            {!follow && <span className="logs-follow-hint">已停止自动滚动，回到底部恢复</span>}
+            {!follow && <span className="logs-follow-hint">{t('logs.followHint')}</span>}
           </div>
         </div>
 
@@ -195,7 +187,7 @@ export function LogsPage() {
         )}
 
         <div className="logs-view" ref={scrollerRef} onScroll={onScroll}>
-          {filtered.length === 0 && !error && <p className="muted logs-empty">暂无日志</p>}
+          {filtered.length === 0 && !error && <p className="muted logs-empty">{t('logs.empty')}</p>}
           <ol className="logs-list">
             {filtered.map((l, i) => (
               <li key={`${l.t}-${i}`} className={`log-line ${l.level}`}>
@@ -212,11 +204,11 @@ export function LogsPage() {
 
       <section className="card logs-files" aria-labelledby="logfiles-title">
         <div className="card-head">
-          <h2 id="logfiles-title">历史日志文件</h2>
-          <span className="muted small">按天滚动保存（保留 7 天），点击可下载完整日志</span>
+          <h2 id="logfiles-title">{t('logs.files.title')}</h2>
+          <span className="muted small">{t('logs.files.hint')}</span>
         </div>
         {files.length === 0 ? (
-          <p className="muted">暂无日志文件</p>
+          <p className="muted">{t('logs.files.empty')}</p>
         ) : (
           <ul className="logs-file-list">
             {files.map((f) => (

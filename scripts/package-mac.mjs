@@ -51,6 +51,10 @@ const PKG_NAME = 'code-review-hub';
 const PKG_DIR = join(OUT_ROOT, PKG_NAME);
 const ARCH = opt('--arch', process.arch === 'arm64' ? 'arm64' : 'x64');
 const MAKE_ZIP = !flag('--no-zip');
+const PKG_VERSION = opt(
+  '--version',
+  JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version
+).replace(/^v/, '');
 
 const log = (msg) => console.log(`[package] ${msg}`);
 const fail = (msg) => {
@@ -92,10 +96,27 @@ if (!existsSync(join(ROOT, 'web', 'dist', 'index.html'))) fail('web build missin
 // Locate the ocr darwin binary. The npm package ships it under the platform
 // package as `ocr` (a Mach-O executable, no extension).
 function findOcrBin() {
+  let globalRoot = '';
+  try {
+    globalRoot = run('npm', ['root', '-g']).trim();
+  } catch {
+    // ignore
+  }
   const candidates = [
-    join(ROOT, 'node_modules', `@smallfishworld`, `ocr-darwin-${ARCH}`, 'bin', 'opencodereview'),
-    join(run('npm', ['root', '-g']).trim(), '@smallfishworld', 'open-code-review-svn',
-      'node_modules', '@smallfishworld', `ocr-darwin-${ARCH}`, 'bin', 'opencodereview'),
+    join(ROOT, 'node_modules', '@smallfishworld', `ocr-darwin-${ARCH}`, 'bin', 'opencodereview'),
+    globalRoot &&
+      join(
+        globalRoot,
+        '@smallfishworld',
+        'open-code-review-svn',
+        'node_modules',
+        '@smallfishworld',
+        `ocr-darwin-${ARCH}`,
+        'bin',
+        'opencodereview'
+      ),
+    globalRoot &&
+      join(globalRoot, '@smallfishworld', `ocr-darwin-${ARCH}`, 'bin', 'opencodereview'),
     join(
       process.env.HOME ?? '',
       '.npm-global',
@@ -115,7 +136,7 @@ function findOcrBin() {
     '/opt/homebrew/lib/node_modules/@smallfishworld/open-code-review-svn/node_modules/@smallfishworld/' +
       `ocr-darwin-${ARCH}` +
       '/bin/opencodereview',
-  ];
+  ].filter(Boolean);
   return candidates.find((p) => existsSync(p)) ?? null;
 }
 
@@ -245,7 +266,7 @@ const plist = `<?xml version="1.0" encoding="UTF-8"?>
   <string>com.codereview.platform</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${PKG_DIR}/start.sh</string>
+    <string>/opt/code-review-hub/start.sh</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
@@ -259,16 +280,16 @@ const plist = `<?xml version="1.0" encoding="UTF-8"?>
   <key>KeepAlive</key>
   <true/>
   <key>StandardOutPath</key>
-  <string>${PKG_DIR}/data/logs-launchd.out</string>
+  <string>/opt/code-review-hub/data/logs-launchd.out</string>
   <key>StandardErrorPath</key>
-  <string>${PKG_DIR}/data/logs-launchd.err</string>
+  <string>/opt/code-review-hub/data/logs-launchd.err</string>
 </dict>
 </plist>
 `;
 writeFileSync(join(PKG_DIR, 'com.codereview.platform.plist.example'), plist, 'utf8');
 
 // ---------------------------------------------------------------- docs
-const pkgVersion = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version;
+const pkgVersion = PKG_VERSION;
 const readme = `# 代码评审平台（macOS 免安装包 v${pkgVersion}，${ARCH}）
 
 终端运行 \`./start.command\`（或双击），浏览器打开 http://localhost:3000/ 。

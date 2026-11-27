@@ -4,6 +4,7 @@ import { api, type Provider, type Repo } from '../api/client';
 import { errorText, useApi, usePageTitle } from '../api/hooks';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useFlash } from '../components/Toast';
+import { useI18n } from '../i18n';
 
 interface FormState {
   type: 'svn' | 'git';
@@ -33,7 +34,8 @@ const emptyForm: FormState = {
 };
 
 export function ReposPage() {
-  usePageTitle('仓库管理');
+  const { t, locale } = useI18n();
+  usePageTitle(t('repos.pageTitle'));
   const repos = useApi(() => api.get<Repo[]>('/api/repos'));
   const providers = useApi(() => api.get<Provider[]>('/api/providers'));
   const flash = useFlash();
@@ -44,8 +46,6 @@ export function ReposPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [retryingId, setRetryingId] = useState<number | null>(null);
 
-  // While any repo is pending/preparing (or failed and being retried), poll
-  // the list so the 初始化 column moves to 完成 without a manual reload.
   const hasPending = repos.data?.some(
     (r) => r.initStatus === 'pending' || r.initStatus === 'preparing'
   );
@@ -55,6 +55,7 @@ export function ReposPage() {
     const timer = setInterval(() => void reload(), 3000);
     return () => clearInterval(timer);
   }, [hasPending, reload]);
+
   const ids = {
     type: useId(),
     name: useId(),
@@ -71,9 +72,6 @@ export function ReposPage() {
     error: useId(),
   };
   const defaultProvider = providers.data?.find((provider) => provider.isDefault) ?? providers.data?.[0];
-  // Pool members whose provider row disappeared (deleted meanwhile) are kept
-  // visible so the operator can see and remove them. While the list is still
-  // loading everything would look "missing", so wait for it.
   const unavailableProviderIds =
     providers.data === null
       ? []
@@ -119,10 +117,10 @@ export function ReposPage() {
     try {
       if (editingId === null) {
         await api.post('/api/repos', payload);
-        flash.ok('仓库已保存，正在后台下载仓库代码…');
+        flash.ok(t('repos.toast.created'));
       } else {
         await api.put(`/api/repos/${editingId}`, payload);
-        flash.ok('仓库已更新，正在后台检查仓库代码…');
+        flash.ok(t('repos.toast.updated'));
       }
       setForm(emptyForm);
       setEditingId(null);
@@ -144,7 +142,7 @@ export function ReposPage() {
         branch: repo.branch,
         enabled: !repo.enabled,
       });
-      flash.ok(repo.enabled ? '仓库已停用' : '仓库已启用');
+      flash.ok(repo.enabled ? t('repos.toast.disabled') : t('repos.toast.enabled'));
       await repos.reload();
     } catch (err) {
       flash.fail(errorText(err));
@@ -155,7 +153,7 @@ export function ReposPage() {
     setRetryingId(repo.id);
     try {
       await api.post(`/api/repos/${repo.id}/init`);
-      flash.ok(`仓库「${repo.name}」开始初始化`);
+      flash.ok(t('repos.toast.initStarted', { name: repo.name }));
       await repos.reload();
     } catch (err) {
       flash.fail(errorText(err));
@@ -170,17 +168,18 @@ export function ReposPage() {
         `/api/repos/${repo.id}/impact`
       );
       const ok = await confirm({
-        title: `删除仓库「${repo.name}」？`,
-        body:
-          `影响范围：\n` +
-          `· 监控规则 ${impact.monitorRules} 条（将停止监控）\n` +
-          `· 历史任务 ${impact.tasks} 个、报告 ${impact.reports} 份（将保留）`,
-        confirmLabel: '删除仓库',
+        title: t('repos.confirm.deleteTitle', { name: repo.name }),
+        body: t('repos.confirm.deleteBody', {
+          rules: impact.monitorRules,
+          tasks: impact.tasks,
+          reports: impact.reports,
+        }),
+        confirmLabel: t('repos.confirm.deleteButton'),
         danger: true,
       });
       if (!ok) return;
       await api.del(`/api/repos/${repo.id}`);
-      flash.ok('仓库已删除，历史报告已保留');
+      flash.ok(t('repos.toast.deleted'));
       if (editingId === repo.id) startCreate();
       await repos.reload();
     } catch (err) {
@@ -188,25 +187,33 @@ export function ReposPage() {
     }
   };
 
+  const defaultProviderInfo = defaultProvider
+    ? locale === 'zh-CN'
+      ? `（${defaultProvider.name} · ${defaultProvider.model}）`
+      : ` (${defaultProvider.name} · ${defaultProvider.model})`
+    : '';
+
   return (
     <div>
       <div className="page-head">
         <div className="page-title-group">
-          <h1>仓库管理</h1>
-          <p className="page-subtitle">管理 SVN 与 Git 代码库连接、并发上限及优先评审模型池</p>
+          <h1>{t('repos.pageTitle')}</h1>
+          <p className="page-subtitle">{t('repos.subtitle')}</p>
         </div>
         <button type="button" className="secondary" onClick={startCreate}>
-          新增仓库
+          {t('repos.addButton')}
         </button>
       </div>
 
       <div className="split">
         <section className="card" aria-labelledby="repo-form-title">
-          <h2 id="repo-form-title">{editingId === null ? '新增仓库' : '编辑仓库'}</h2>
+          <h2 id="repo-form-title">
+            {editingId === null ? t('repos.form.createTitle') : t('repos.form.editTitle')}
+          </h2>
           <form className="form" onSubmit={save} aria-describedby={ids.hint}>
             <div className="two-col">
               <label htmlFor={ids.type}>
-                类型
+                {t('common.type')}
                 <select
                   id={ids.type}
                   value={form.type}
@@ -217,7 +224,7 @@ export function ReposPage() {
                 </select>
               </label>
               <label htmlFor={ids.reviewConcurrency}>
-                评审并发数（必填）
+                {t('repos.form.reviewConcurrency')}
                 <input
                   id={ids.reviewConcurrency}
                   name="reviewConcurrency"
@@ -233,33 +240,35 @@ export function ReposPage() {
               </label>
             </div>
             <p className="muted small form-hint" id={ids.reviewConcurrencyHint}>
-              同一仓库同时运行的评审任务数。设为 1 时串行，实际并发还受实例上限约束。
+              {t('repos.form.reviewConcurrencyHint')}
             </p>
             <label htmlFor={ids.name}>
-              名称
+              {t('common.name')}
               <input
                 id={ids.name}
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
-                placeholder="例如：核心交易系统"
+                placeholder={t('repos.form.namePlaceholder')}
                 required
               />
             </label>
             <label htmlFor={ids.url}>
-              {form.type === 'svn' ? '仓库 URL' : '远端 URL'}
+              {form.type === 'svn' ? t('repos.form.svnUrl') : t('repos.form.gitUrl')}
               <input
                 id={ids.url}
                 value={form.url}
                 onChange={(e) => setForm({ ...form, url: e.target.value })}
                 placeholder={
-                  form.type === 'svn' ? 'svn://host/repo 或 https://host/svn/repo' : 'https://git.example.com/team/repo.git'
+                  form.type === 'svn'
+                    ? t('repos.form.svnUrlPlaceholder')
+                    : t('repos.form.gitUrlPlaceholder')
                 }
                 required
               />
             </label>
             {form.type === 'git' && (
               <label htmlFor={ids.branch}>
-                监控分支
+                {t('repos.form.branch')}
                 <input
                   id={ids.branch}
                   value={form.branch}
@@ -269,7 +278,7 @@ export function ReposPage() {
             )}
             <div className="two-col">
               <label htmlFor={ids.username}>
-                用户名（可选）
+                {t('repos.form.username')}
                 <input
                   id={ids.username}
                   value={form.username}
@@ -278,22 +287,21 @@ export function ReposPage() {
                 />
               </label>
               <label htmlFor={ids.password}>
-                {form.type === 'svn' ? '密码' : '密码 / 访问令牌'}
+                {form.type === 'svn' ? t('repos.form.svnPassword') : t('repos.form.gitPassword')}
                 <input
                   id={ids.password}
                   type="password"
                   value={form.password}
                   onChange={(e) => setForm({ ...form, password: e.target.value })}
-                  placeholder={editingId === null ? '' : '留空表示不修改'}
+                  placeholder={editingId === null ? '' : t('common.leaveBlankUnchanged')}
                   autoComplete="new-password"
                 />
               </label>
             </div>
             <fieldset className="provider-pool" aria-describedby={ids.providerHint}>
-              <legend>评审模型（可多选）</legend>
+              <legend>{t('repos.form.providerLegend')}</legend>
               <p className="muted small" id={ids.providerHint}>
-                并发评审时按当前负载在所选模型间分配；列表第一项为首选模型。
-                不选则继承全局默认{defaultProvider ? `（${defaultProvider.name} · ${defaultProvider.model}）` : ''}。
+                {t('repos.form.providerHint', { defaultInfo: defaultProviderInfo })}
               </p>
               {providers.data?.map((provider) => {
                 const order = form.providerIds.indexOf(provider.id);
@@ -316,7 +324,7 @@ export function ReposPage() {
                         }
                       />
                       {provider.name} · {provider.model}
-                      {order === 0 && <span className="tag">首选</span>}
+                      {order === 0 && <span className="tag">{t('repos.form.providerPreferred')}</span>}
                     </label>
                   </div>
                 );
@@ -331,19 +339,30 @@ export function ReposPage() {
                         setForm({ ...form, providerIds: form.providerIds.filter((x) => x !== id) })
                       }
                     />
-                    Provider #{id}（已删除）
+                    {t('repos.form.providerDeleted', { id })}
                   </label>
                 </div>
               ))}
             </fieldset>
-            {providers.loading && <p className="muted small" role="status">正在加载模型列表…</p>}
+            {providers.loading && (
+              <p className="muted small" role="status">
+                {t('repos.form.providerLoading')}
+              </p>
+            )}
             {providers.error && (
               <p className="muted small" role="alert">
-                模型列表加载失败。<button type="button" className="link" onClick={providers.reload}>重试</button>
+                {t('repos.form.providerLoadError')}{' '}
+                <button type="button" className="link" onClick={providers.reload}>
+                  {t('common.retry')}
+                </button>
               </p>
             )}
             {providers.data?.length === 0 && (
-              <p className="muted small">可在 <Link to="/providers">LLM Provider</Link> 中添加模型。</p>
+              <p className="muted small">
+                {t('repos.form.providerEmptyPrefix')}
+                <Link to="/providers">{t('nav.providers')}</Link>
+                {t('repos.form.providerEmptySuffix')}
+              </p>
             )}
             <label className="checkbox" htmlFor={ids.enabled}>
               <input
@@ -352,7 +371,7 @@ export function ReposPage() {
                 checked={form.enabled}
                 onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
               />
-              启用该仓库
+              {t('repos.form.enabled')}
             </label>
             {formError && (
               <div className="alert error" id={ids.error} role="alert">
@@ -361,43 +380,43 @@ export function ReposPage() {
             )}
             <div className="actions">
               <button className="primary" type="submit" disabled={saving}>
-                {saving ? '验证并保存中…' : '保存'}
+                {saving ? t('repos.form.saving') : t('common.save')}
               </button>
               {editingId !== null && (
                 <button type="button" className="secondary" onClick={startCreate}>
-                  取消编辑
+                  {t('common.cancelEdit')}
                 </button>
               )}
             </div>
             <p className="muted small" id={ids.hint}>
-              保存前会验证仓库连通性（SVN 使用 svn info，Git 使用 git ls-remote），验证失败不会保存。
+              {t('repos.form.hint')}
             </p>
           </form>
         </section>
 
         <section className="card grow" aria-labelledby="repo-list-title">
-          <h2 id="repo-list-title">仓库列表</h2>
-          {repos.loading && <p className="muted">加载中…</p>}
+          <h2 id="repo-list-title">{t('repos.list.title')}</h2>
+          {repos.loading && <p className="muted">{t('common.loading')}</p>}
           {repos.error && (
             <div className="alert error" role="alert">
               {repos.error}
             </div>
           )}
-          {repos.data && repos.data.length === 0 && <p className="muted">暂无仓库，请先新增。</p>}
+          {repos.data && repos.data.length === 0 && <p className="muted">{t('repos.list.empty')}</p>}
           {repos.data && repos.data.length > 0 && (
             <div className="table-wrap">
               <table className="table">
-                <caption className="visually-hidden">已配置的仓库</caption>
+                <caption className="visually-hidden">{t('repos.list.caption')}</caption>
                 <thead>
                   <tr>
-                    <th scope="col">名称 / 地址</th>
-                    <th scope="col">类型</th>
-                    <th scope="col">分支</th>
-                    <th scope="col">凭据</th>
-                    <th scope="col">初始化</th>
-                    <th scope="col">状态</th>
+                    <th scope="col">{t('repos.list.colNameUrl')}</th>
+                    <th scope="col">{t('common.type')}</th>
+                    <th scope="col">{t('repos.list.colBranch')}</th>
+                    <th scope="col">{t('repos.list.colCredential')}</th>
+                    <th scope="col">{t('repos.list.colInit')}</th>
+                    <th scope="col">{t('common.status')}</th>
                     <th scope="col" className="actions-cell">
-                      操作
+                      {t('common.actions')}
                     </th>
                   </tr>
                 </thead>
@@ -414,49 +433,64 @@ export function ReposPage() {
                         <span className={`tag ${repo.type}`}>{repo.type.toUpperCase()}</span>
                       </td>
                       <td className="nowrap">{repo.type === 'git' ? repo.branch : '—'}</td>
-                      <td className="nowrap">{repo.hasCredential ? '已配置' : '—'}</td>
+                      <td className="nowrap">
+                        {repo.hasCredential ? t('repos.list.configured') : '—'}
+                      </td>
                       <td className="nowrap">
                         {repo.initStatus === 'preparing' || repo.initStatus === 'pending' ? (
                           <span className="tag preparing">
                             <span className="spinner" aria-hidden="true" />
-                            下载中…
+                            {t('repos.list.downloading')}
                           </span>
                         ) : repo.initStatus === 'failed' ? (
                           <button
                             type="button"
                             className="tag failed init-retry"
-                            title={repo.initError ?? '初始化失败'}
+                            title={repo.initError ?? t('repos.list.initFailed')}
                             onClick={() => retryInit(repo)}
                             disabled={retryingId === repo.id}
                           >
-                            {retryingId === repo.id ? '重试中…' : '失败，点击重试'}
+                            {retryingId === repo.id
+                              ? t('common.retrying')
+                              : t('repos.list.initFailedRetry')}
                           </button>
                         ) : (
-                          <span className="tag succeeded">完成</span>
+                          <span className="tag succeeded">{t('repos.list.initReady')}</span>
                         )}
                       </td>
                       <td className="nowrap">
                         <span className={repo.enabled ? 'dot ok' : 'dot off'} />
-                        {repo.enabled ? '启用' : '停用'}
+                        {repo.enabled ? t('common.enabled') : t('common.disabled')}
                       </td>
                       <td className="actions-cell">
                         <div className="row-actions">
                           <button type="button" className="link" onClick={() => startEdit(repo)}>
-                            编辑<span className="visually-hidden">仓库 {repo.name}</span>
+                            {t('common.edit')}
+                            <span className="visually-hidden">
+                              {t('repos.list.srRepo', { name: repo.name })}
+                            </span>
                           </button>
                           <Link to={`/repos/${repo.id}/memory`}>
-                            项目记忆<span className="visually-hidden">仓库 {repo.name}</span>
+                            {t('repos.list.memory')}
+                            <span className="visually-hidden">
+                              {t('repos.list.srRepo', { name: repo.name })}
+                            </span>
                           </Link>
                           <button type="button" className="link" onClick={() => toggle(repo)}>
-                            {repo.enabled ? '停用' : '启用'}
-                            <span className="visually-hidden">仓库 {repo.name}</span>
+                            {repo.enabled ? t('common.disable') : t('common.enable')}
+                            <span className="visually-hidden">
+                              {t('repos.list.srRepo', { name: repo.name })}
+                            </span>
                           </button>
                           <button
                             type="button"
                             className="link danger"
                             onClick={() => remove(repo)}
                           >
-                            删除<span className="visually-hidden">仓库 {repo.name}</span>
+                            {t('common.delete')}
+                            <span className="visually-hidden">
+                              {t('repos.list.srRepo', { name: repo.name })}
+                            </span>
                           </button>
                         </div>
                       </td>

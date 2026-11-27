@@ -1,3 +1,5 @@
+import { translate } from '../i18n';
+
 /**
  * Minimal API client. Auth is pluggable: the token is supplied by the
  * AuthProvider through `setAuthToken`, so swapping the auth layer (e.g. OA /
@@ -55,7 +57,7 @@ async function request<T>(
     const message =
       parsed && typeof parsed === 'object' && 'message' in parsed
         ? String((parsed as { message: unknown }).message)
-        : `请求失败（HTTP ${res.status}）`;
+        : translate('common.requestFailed', { status: res.status });
     const err = new Error(message) as ApiError;
     err.status = res.status;
     err.body = parsed;

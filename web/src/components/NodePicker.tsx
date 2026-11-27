@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { api, type RepoNode, type RepoNodePage } from '../api/client';
 import { errorText } from '../api/hooks';
+import { useI18n } from '../i18n';
 
 interface NodePickerProps {
   repoId: number | '';
@@ -34,6 +35,7 @@ export function NodePicker({
   required,
   inputId,
 }: NodePickerProps) {
+  const { t } = useI18n();
   const listId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -281,7 +283,7 @@ export function NodePicker({
         <button
           type="button"
           className="combobox-toggle"
-          aria-label={showPopup ? '收起节点列表' : '展开节点列表'}
+          aria-label={showPopup ? t('nodePicker.collapse') : t('nodePicker.expand')}
           aria-expanded={showPopup}
           disabled={repoId === ''}
           // Keep focus on the input so the list stays anchored to it.
@@ -303,7 +305,7 @@ export function NodePicker({
           style={{ maxBlockSize: placement.maxHeight }}
           onScroll={onPopupScroll}
         >
-          {loading && nodes.length === 0 && <p className="combobox-status">加载中…</p>}
+          {loading && nodes.length === 0 && <p className="combobox-status">{t('common.loading')}</p>}
           {error && (
             <p className="combobox-status error" role="status">
               {error}
@@ -311,7 +313,7 @@ export function NodePicker({
           )}
           {!error && !loading && nodes.length === 0 && (
             <p className="combobox-status">
-              {filter.trim() ? `没有匹配「${filter.trim()}」的节点` : '该仓库暂无节点'}
+              {filter.trim() ? t('nodePicker.noMatch', { filter: filter.trim() }) : t('nodePicker.empty')}
             </p>
           )}
           {nodes.length > 0 && (
@@ -335,20 +337,20 @@ export function NodePicker({
                       {shortNode(n.node)}
                     </span>
                     <span className="combobox-meta">
-                      {n.author || '未知作者'} · {formatDate(n.date)}
+                      {n.author || t('nodePicker.unknownAuthor')} · {formatDate(n.date)}
                     </span>
                   </span>
-                  <span className="combobox-message">{n.message || '（无提交说明）'}</span>
+                  <span className="combobox-message">{n.message || t('nodePicker.noMessage')}</span>
                 </li>
               ))}
             </ul>
           )}
-          {loadingMore && <p className="combobox-status">加载更早记录…</p>}
+          {loadingMore && <p className="combobox-status">{t('nodePicker.loadingMore')}</p>}
           {!loadingMore && exhausted && nodes.length > 0 && (
-            <p className="combobox-status combobox-end">已到最早记录</p>
+            <p className="combobox-status combobox-end">{t('nodePicker.reachedEnd')}</p>
           )}
           <p className="combobox-hint">
-            也可直接输入未列出的节点（revision 号或 commit 哈希），下滑加载更早历史
+            {t('nodePicker.hint')}
           </p>
         </div>
       )}

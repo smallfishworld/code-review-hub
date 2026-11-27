@@ -2,9 +2,11 @@ import { useId, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { errorText, usePageTitle } from '../api/hooks';
+import { LanguageSwitcher, useI18n } from '../i18n';
 
 export function LoginPage() {
-  usePageTitle('登录');
+  const { t } = useI18n();
+  usePageTitle(t('login.pageTitle'));
   const { status, login } = useAuth();
   const navigate = useNavigate();
   const [username, setUsername] = useState('admin');
@@ -29,20 +31,19 @@ export function LoginPage() {
 
   return (
     <div className="login-wrap">
+      <LanguageSwitcher className="login-lang" />
       <form className="card login-card" onSubmit={submit} aria-labelledby="login-title">
         <div className="login-brand">
           <span className="brand-mark" aria-hidden="true" />
           <div>
-            <h1 id="login-title">代码评审平台</h1>
+            <h1 id="login-title">{t('app.name')}</h1>
             <p className="muted small">
-              {status?.loginRequired
-                ? '请输入管理员口令登录控制台'
-                : '当前未设置管理员口令（首次使用请登录后设置）'}
+              {status?.loginRequired ? t('login.promptRequired') : t('login.promptInitial')}
             </p>
           </div>
         </div>
         <label htmlFor={ids.username}>
-          用户名
+          {t('login.username')}
           <input
             id={ids.username}
             value={username}
@@ -51,7 +52,7 @@ export function LoginPage() {
           />
         </label>
         <label htmlFor={ids.password}>
-          口令
+          {t('login.password')}
           <input
             id={ids.password}
             type="password"
@@ -69,7 +70,7 @@ export function LoginPage() {
           </div>
         )}
         <button className="primary" type="submit" disabled={busy}>
-          {busy ? '登录中…' : '登录'}
+          {busy ? t('login.submitting') : t('login.submit')}
         </button>
       </form>
     </div>

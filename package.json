@@ -18,6 +18,9 @@
     "test:watch": "vitest",
     "start": "node server/dist/index.js",
     "package:win": "node scripts/package-win.mjs",
+    "package:mac": "node scripts/package-mac.mjs",
+    "package:linux": "node scripts/package-linux.mjs",
+    "release:notes": "node scripts/generate-release-notes.mjs",
     "lint": "eslint server/src && npm --prefix web run lint"
   },
   "devDependencies": {

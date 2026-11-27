@@ -3,6 +3,7 @@ import { api, type McpProbeResult, type McpServer } from '../api/client';
 import { errorText, useApi, usePageTitle } from '../api/hooks';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useFlash } from '../components/Toast';
+import { useI18n } from '../i18n';
 
 interface FormState {
   name: string;
@@ -39,7 +40,8 @@ interface TestState {
 }
 
 export function McpServersPage() {
-  usePageTitle('MCP 服务器');
+  const { t } = useI18n();
+  usePageTitle(t('mcp.pageTitle'));
   const servers = useApi(() => api.get<McpServer[]>('/api/mcp-servers'));
   const repos = useApi(() => api.get<{ items: { id: number; name: string }[] }>('/api/repos?limit=200'));
   const flash = useFlash();
@@ -90,7 +92,7 @@ export function McpServersPage() {
         try {
           config.env = JSON.parse(form.env);
         } catch {
-          flash.fail('env 必须是 JSON 对象');
+          flash.fail(t('mcp.error.envJson'));
           return null;
         }
       }
@@ -100,14 +102,14 @@ export function McpServersPage() {
         try {
           config.headers = JSON.parse(form.headers);
         } catch {
-          flash.fail('headers 必须是 JSON 对象');
+          flash.fail(t('mcp.error.headersJson'));
           return null;
         }
       }
     }
     const allowlist = form.allowlist
       .split(/[,]/)
-      .map((t) => t.trim())
+      .map((item) => item.trim())
       .filter(Boolean);
     return {
       name: form.name.trim(),
@@ -128,10 +130,10 @@ export function McpServersPage() {
     try {
       if (editingId === null) {
         await api.post('/api/mcp-servers', payload);
-        flash.ok('MCP 服务器已保存');
+        flash.ok(t('mcp.toast.saved'));
       } else {
         await api.put(`/api/mcp-servers/${editingId}`, payload);
-        flash.ok('MCP 服务器已更新');
+        flash.ok(t('mcp.toast.updated'));
       }
       setForm(empty);
       setEditingId(null);
@@ -144,12 +146,23 @@ export function McpServersPage() {
   };
 
   const test = async (s: McpServer) => {
-    setTestResult((prev) => ({ ...prev, [s.id]: { kind: 'pending', text: '测试中…' } }));
+    setTestResult((prev) => ({
+      ...prev,
+      [s.id]: { kind: 'pending', text: t('mcp.test.pending') },
+    }));
     try {
       const res = await api.post<McpProbeResult>(`/api/mcp-servers/${s.id}/test`);
+      const stageText =
+        res.stage === 'start'
+          ? t('mcp.test.stageStart')
+          : res.stage === 'timeout'
+            ? t('mcp.test.stageTimeout')
+            : t('mcp.test.stageProtocol');
       const text = res.ok
-        ? `握手成功，工具：${res.tools.length > 0 ? res.tools.join(', ') : '（无）'}`
-        : `失败（${res.stage === 'start' ? '启动失败' : res.stage === 'timeout' ? '超时' : '协议错误'}）：${res.error ?? ''}`;
+        ? t('mcp.test.ok', {
+            tools: res.tools.length > 0 ? res.tools.join(', ') : t('mcp.test.noTools'),
+          })
+        : t('mcp.test.fail', { stage: stageText, error: res.error ?? '' });
       setTestResult((prev) => ({ ...prev, [s.id]: { kind: res.ok ? 'ok' : 'fail', text } }));
     } catch (err) {
       setTestResult((prev) => ({ ...prev, [s.id]: { kind: 'fail', text: errorText(err) } }));
@@ -167,15 +180,15 @@ export function McpServersPage() {
 
   const remove = async (s: McpServer) => {
     const ok = await confirm({
-      title: `删除 MCP 服务器「${s.name}」？`,
-      body: '删除后无法恢复；绑定了该服务器的仓库将不再注入此 MCP。',
-      confirmLabel: '删除',
+      title: t('mcp.confirm.deleteTitle', { name: s.name }),
+      body: t('mcp.confirm.deleteBody'),
+      confirmLabel: t('common.delete'),
       danger: true,
     });
     if (!ok) return;
     try {
       await api.del(`/api/mcp-servers/${s.id}`);
-      flash.ok('已删除');
+      flash.ok(t('common.deleted'));
       await servers.reload();
     } catch (err) {
       flash.fail(errorText(err));
@@ -186,12 +199,12 @@ export function McpServersPage() {
     <div>
       <div className="page-head">
         <div className="page-title-group">
-          <h1>MCP 服务器</h1>
-          <p className="page-subtitle">接入代码图谱与外部上下文工具，按全局或单仓库作用域注入评审流程</p>
+          <h1>{t('mcp.pageTitle')}</h1>
+          <p className="page-subtitle">{t('mcp.subtitle')}</p>
         </div>
       </div>
       <div className="alert info" role="note">
-        风险提示：MCP 服务器以平台服务账号权限执行命令（stdio）或访问网络地址（http），仅应添加可信来源的 MCP。配置中的 Authorization / token 等敏感值在回显时自动脱敏。
+        {t('mcp.riskNotice')}
       </div>
 
       <div className="split providers-split">
@@ -245,35 +258,38 @@ function ServerForm(props: {
   cancel: () => void;
   repos: { id: number; name: string }[];
 }) {
+  const { t } = useI18n();
   const { form, setForm, ids, editingId, busy, save, cancel, repos } = props;
   return (
     <section className="card" aria-labelledby="mcp-form-title">
-      <h2 id="mcp-form-title">{editingId === null ? '新增 MCP 服务器' : '编辑 MCP 服务器'}</h2>
+      <h2 id="mcp-form-title">
+        {editingId === null ? t('mcp.form.createTitle') : t('mcp.form.editTitle')}
+      </h2>
       <form className="form" onSubmit={save}>
         <label htmlFor={ids.name}>
-          名称
+          {t('common.name')}
           <input
             id={ids.name}
             value={form.name}
             onChange={(e) => setForm({ ...form, name: e.target.value })}
-            placeholder="例如：codegraph"
+            placeholder={t('mcp.form.namePlaceholder')}
             required
           />
         </label>
         <div className="two-col">
           <label htmlFor={ids.transport}>
-            传输类型
+            {t('mcp.form.transport')}
             <select
               id={ids.transport}
               value={form.transport}
               onChange={(e) => setForm({ ...form, transport: e.target.value as 'stdio' | 'http' })}
             >
-              <option value="stdio">stdio（本地命令）</option>
-              <option value="http">http（远程地址）</option>
+              <option value="stdio">{t('mcp.form.transportStdio')}</option>
+              <option value="http">{t('mcp.form.transportHttp')}</option>
             </select>
           </label>
           <label htmlFor={ids.timeoutSec}>
-            超时秒数
+            {t('mcp.form.timeoutSec')}
             <input
               id={ids.timeoutSec}
               type="number"
@@ -288,27 +304,27 @@ function ServerForm(props: {
           <>
             <div className="two-col">
               <label htmlFor={ids.command}>
-                启动命令
+                {t('mcp.form.command')}
                 <input
                   id={ids.command}
                   value={form.command}
                   onChange={(e) => setForm({ ...form, command: e.target.value })}
-                  placeholder="例如：codegraph"
+                  placeholder={t('mcp.form.commandPlaceholder')}
                   required
                 />
               </label>
               <label htmlFor={ids.args}>
-                参数（空格分隔）
+                {t('mcp.form.args')}
                 <input
                   id={ids.args}
                   value={form.args}
                   onChange={(e) => setForm({ ...form, args: e.target.value })}
-                  placeholder="例如：serve --mcp"
+                  placeholder={t('mcp.form.argsPlaceholder')}
                 />
               </label>
             </div>
             <label htmlFor={ids.env}>
-              环境变量（JSON，可选）
+              {t('mcp.form.env')}
               <input
                 id={ids.env}
                 value={form.env}
@@ -330,7 +346,7 @@ function ServerForm(props: {
               />
             </label>
             <label htmlFor={ids.headers}>
-              请求头（JSON，可选）
+              {t('mcp.form.headers')}
               <input
                 id={ids.headers}
                 value={form.headers}
@@ -342,26 +358,26 @@ function ServerForm(props: {
         )}
         <div className="two-col">
           <label htmlFor={ids.scope}>
-            作用域
+            {t('mcp.form.scope')}
             <select
               id={ids.scope}
               value={form.scope}
               onChange={(e) => setForm({ ...form, scope: e.target.value as 'global' | 'repo' })}
             >
-              <option value="global">全局（所有仓库）</option>
-              <option value="repo">绑定单个仓库</option>
+              <option value="global">{t('mcp.form.scopeGlobal')}</option>
+              <option value="repo">{t('mcp.form.scopeRepo')}</option>
             </select>
           </label>
           {form.scope === 'repo' && (
             <label htmlFor={ids.repoId}>
-              绑定仓库
+              {t('mcp.form.repoId')}
               <select
                 id={ids.repoId}
                 value={form.repoId}
                 onChange={(e) => setForm({ ...form, repoId: e.target.value })}
                 required
               >
-                <option value="">请选择…</option>
+                <option value="">{t('mcp.form.selectRepo')}</option>
                 {repos.map((r) => (
                   <option key={r.id} value={r.id}>
                     #{r.id} {r.name}
@@ -372,21 +388,21 @@ function ServerForm(props: {
           )}
         </div>
         <label htmlFor={ids.allowlist}>
-          工具白名单（逗号分隔，可选）
+          {t('mcp.form.allowlist')}
           <input
             id={ids.allowlist}
             value={form.allowlist}
             onChange={(e) => setForm({ ...form, allowlist: e.target.value })}
-            placeholder="留空 = 不限制；ocr 引擎不支持过滤时仅审计标注"
+            placeholder={t('mcp.form.allowlistPlaceholder')}
           />
         </label>
         <div className="actions">
           <button className="primary" type="submit" disabled={busy}>
-            保存
+            {t('common.save')}
           </button>
           {editingId !== null && (
             <button type="button" className="secondary" onClick={cancel}>
-              取消编辑
+              {t('common.cancelEdit')}
             </button>
           )}
         </div>
@@ -403,24 +419,25 @@ function ServerList(props: {
   onToggle: (s: McpServer) => void;
   onRemove: (s: McpServer) => void;
 }) {
+  const { t } = useI18n();
   const { servers, testResult, onEdit, onTest, onToggle, onRemove } = props;
   return (
     <section className="card grow" aria-labelledby="mcp-list-title">
-      <h2 id="mcp-list-title">MCP 服务器列表</h2>
-      {servers.length === 0 && <p className="muted">暂无 MCP 服务器。</p>}
+      <h2 id="mcp-list-title">{t('mcp.list.title')}</h2>
+      {servers.length === 0 && <p className="muted">{t('mcp.list.empty')}</p>}
       {servers.length > 0 && (
         <div className="table-wrap">
           <table className="table">
-            <caption className="visually-hidden">MCP 服务器列表</caption>
+            <caption className="visually-hidden">{t('mcp.list.caption')}</caption>
             <thead>
               <tr>
-                <th scope="col">名称</th>
-                <th scope="col">类型</th>
-                <th scope="col">目标</th>
-                <th scope="col">作用域</th>
-                <th scope="col">状态</th>
+                <th scope="col">{t('common.name')}</th>
+                <th scope="col">{t('common.type')}</th>
+                <th scope="col">{t('mcp.list.colTarget')}</th>
+                <th scope="col">{t('mcp.list.colScope')}</th>
+                <th scope="col">{t('common.status')}</th>
                 <th scope="col" className="actions-cell">
-                  操作
+                  {t('common.actions')}
                 </th>
               </tr>
             </thead>
@@ -441,17 +458,20 @@ function ServerList(props: {
                         {target}
                       </td>
                       <td className="small">
-                        {s.scope === 'global' ? '全局' : `仓库 #${s.repoId}`}
+                        {s.scope === 'global'
+                          ? t('mcp.list.scopeGlobal')
+                          : t('mcp.list.scopeRepo', { id: s.repoId ?? '' })}
                       </td>
                       <td>
                         <span className={`tag ${s.enabled ? 'ok' : 'muted'}`}>
-                          {s.enabled ? '启用' : '停用'}
+                          {s.enabled ? t('common.enabled') : t('common.disabled')}
                         </span>
                       </td>
                       <td className="actions-cell">
                         <div className="row-actions">
                           <button type="button" className="link" onClick={() => onEdit(s)}>
-                            编辑<span className="visually-hidden">MCP {s.name}</span>
+                            {t('common.edit')}
+                            <span className="visually-hidden">MCP {s.name}</span>
                           </button>
                           <button
                             type="button"
@@ -459,15 +479,16 @@ function ServerList(props: {
                             onClick={() => onTest(s)}
                             disabled={result?.kind === 'pending'}
                           >
-                            {result?.kind === 'pending' ? '测试中…' : '连通性测试'}
+                            {result?.kind === 'pending' ? t('mcp.test.pending') : t('mcp.list.test')}
                             <span className="visually-hidden">MCP {s.name}</span>
                           </button>
                           <button type="button" className="link" onClick={() => onToggle(s)}>
-                            {s.enabled ? '停用' : '启用'}
+                            {s.enabled ? t('common.disable') : t('common.enable')}
                             <span className="visually-hidden">MCP {s.name}</span>
                           </button>
                           <button type="button" className="link danger" onClick={() => onRemove(s)}>
-                            删除<span className="visually-hidden">MCP {s.name}</span>
+                            {t('common.delete')}
+                            <span className="visually-hidden">MCP {s.name}</span>
                           </button>
                         </div>
                       </td>

@@ -1,7 +1,10 @@
 # code-review-hub（自动化代码评审平台）
 
+**简体中文** | [English](README.en.md)
+
 基于 [`ocr`](https://github.com/smallfishworld/open-code-review-svn)（open-code-review 的 SVN fork）构建的自动化代码评审平台：对 **SVN / Git** 仓库上库的每个节点（revision / commit）调用评审引擎做 AI 评审，支持手动触发单节点 / 区间评审、按人员与路径过滤的自动监控、评审报告浏览，以及邮件 / 聊天机器人通知。
 
+- **中英文国际化**：Web 控制台完整支持**简体中文**与**英文**界面，自动识别浏览器语言并支持一键切换
 - **可插拔评审引擎**：统一的 `ReviewEngine` 适配器接口（ocr 为首个适配器），按 监控规则 → 仓库 → 全局默认 三级选择引擎
 - **MCP 服务器集成**：平台统一管理 MCP 服务器（stdio / http），评审时注入引擎配置，使评审智能体可调用 MCP 工具（如 codegraph 符号检索）；连通性测试与逐任务调用审计
 - **项目记忆**：按仓库沉淀六类记忆（架构 / 约定 / 坑点 / 误报抑制 / 历史修复 / 术语），评审前检索注入、评审后 LLM 蒸馏，误报反馈闭环让评审随使用越来越准
@@ -134,15 +137,31 @@ PORT=3000 DATA_DIR=/var/lib/code-review-hub npm start
 
 浏览器访问 `http://127.0.0.1:3000`。
 
-免安装打包（用与目标架构一致的 Node 在 macOS 上执行，产物为 `dist-mac/code-review-hub-macos-<arch>-v*.tar.gz`，内置 Node、ocr 与 CodeGraph，SVN 需目标机 `brew install subversion`）：
+免安装打包（用与目标架构一致的 Node 在对应系统上执行，内置 Node、ocr 与 CodeGraph，目标机无需安装 Node/npm）：
 
 ```bash
-node scripts/package-mac.mjs [--arch arm64|x64]
+npm run package:win                        # Windows x64 → dist-win/code-review-hub-win-x64-v*.zip
+npm run package:mac -- --arch arm64        # macOS arm64 / x64 → dist-mac/code-review-hub-macos-<arch>-v*.tar.gz
+npm run package:linux -- --arch x64        # Linux x64 / arm64 → dist-linux/code-review-hub-linux-<arch>-v*.tar.gz
 ```
 
-包内 `start.command` 可双击启动，`start.sh` 供 launchd 使用（包内附 plist 模板）。
+- macOS 包内 `start.command` 可双击启动，`start.sh` 供 launchd 使用（附 plist 模板）；SVN 需目标机 `brew install subversion`。
+- Linux 包内 `start.sh` 可直接运行，附 `code-review-hub.service.example` systemd 模板。
+- Windows 包内 `start.cmd` 可双击启动，`start-background.cmd` 供后台运行。
 
-### 2.4 环境变量
+### 2.4 GitHub Actions 自动打包发布流水线
+
+仓库已配置 `.github/workflows/ci.yml`（持续集成）与 `.github/workflows/release.yml`（多平台自动发布）：
+
+1. 如需自定义本次发布亮点，在 [`CHANGELOG.md`](CHANGELOG.md) 中新增 `## [X.Y.Z] - YYYY-MM-DD` 章节（含 `### English` 与 `### 简体中文` 小节）。
+2. 推送语义化版本标签（例如 `git tag v0.2.0 && git push origin v0.2.0`），或在 GitHub Actions 页面手动触发 **Release** 工作流。
+3. 流水线将自动完成：
+   - 运行 lint、单元测试与构建校验；
+   - 并行打包 **Windows x64**、**macOS arm64**、**macOS x64**、**Linux x64**、**Linux arm64** 五套免安装包；
+   - 生成 `SHA256SUMS.txt` 校验文件，并通过 `scripts/generate-release-notes.mjs` 自动生成规范的**中英文双语 Release Note**；
+   - 自动创建并发布 GitHub Release，附带全部软件包与校验和。
+
+### 2.5 环境变量
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |

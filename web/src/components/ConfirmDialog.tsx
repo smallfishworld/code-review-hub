@@ -9,6 +9,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { useI18n } from '../i18n';
 
 export interface ConfirmOptions {
   title: string;
@@ -33,6 +34,7 @@ interface PendingConfirm extends ConfirmOptions {
  * there is no focus trap or key handler here.
  */
 export function ConfirmProvider({ children }: { children: ReactNode }) {
+  const { t } = useI18n();
   const [pending, setPending] = useState<PendingConfirm | null>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const titleId = useId();
@@ -41,9 +43,9 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
   const confirm = useCallback(
     (options: ConfirmOptions) =>
       new Promise<boolean>((resolve) => {
-        setPending({ ...options, confirmLabel: options.confirmLabel ?? '确认', resolve });
+        setPending({ ...options, confirmLabel: options.confirmLabel ?? t('common.confirm'), resolve });
       }),
-    []
+    [t]
   );
 
   useEffect(() => {
@@ -88,7 +90,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
             <form method="dialog" className="actions">
               {/* Safe action first, and autofocused for destructive flows. */}
               <button value="cancel" autoFocus={pending.danger}>
-                取消
+                {t('common.cancel')}
               </button>
               <button
                 value="confirm"

@@ -2,10 +2,12 @@ import { useId, useState } from 'react';
 import { api, type AuthStatus, type DepInfo } from '../api/client';
 import { errorText, useApi, usePageTitle } from '../api/hooks';
 import { useFlash } from '../components/Toast';
+import { useI18n } from '../i18n';
 
 /** Settings: dependency status + admin password. */
 export function SettingsPage() {
-  usePageTitle('系统设置');
+  const { t } = useI18n();
+  usePageTitle(t('settings.pageTitle'));
   const deps = useApi(() => api.get<{ results: DepInfo[]; ok: boolean }>('/api/deps'));
   const auth = useApi(() => api.get<AuthStatus>('/api/auth/status'));
   const flash = useFlash();
@@ -20,13 +22,13 @@ export function SettingsPage() {
   };
 
   // Re-probe the external commands (the report is captured at startup, so a
-  // freshly installed svn/git would otherwise stay "不可用" until a restart).
+  // freshly installed svn/git would otherwise stay unavailable until a restart).
   const recheckDeps = async () => {
     setChecking(true);
     try {
       const res = await api.post<{ results: DepInfo[]; ok: boolean }>('/api/deps/check');
       deps.setData(res);
-      flash.ok(res.ok ? '依赖检测通过' : '依赖检测完成，存在不可用项');
+      flash.ok(res.ok ? t('settings.deps.toastOk') : t('settings.deps.toastFail'));
     } catch (err) {
       flash.fail(errorText(err));
     } finally {
@@ -42,7 +44,7 @@ export function SettingsPage() {
         password: next,
         currentPassword: current || undefined,
       });
-      flash.ok('管理员口令已更新');
+      flash.ok(t('settings.password.toastUpdated'));
       setCurrent('');
       setNext('');
       await auth.reload();
@@ -57,25 +59,25 @@ export function SettingsPage() {
     <div>
       <div className="page-head">
         <div className="page-title-group">
-          <h1>系统设置</h1>
-          <p className="page-subtitle">检查外部命令行运行依赖环境并维护管理员安全口令</p>
+          <h1>{t('settings.pageTitle')}</h1>
+          <p className="page-subtitle">{t('settings.subtitle')}</p>
         </div>
       </div>
 
       <div className="split settings-split">
         <section className="card" aria-labelledby="deps-title">
           <div className="card-head">
-            <h2 id="deps-title">依赖状态</h2>
+            <h2 id="deps-title">{t('settings.deps.title')}</h2>
             <button
               type="button"
               className="secondary small"
               onClick={() => void recheckDeps()}
               disabled={checking}
             >
-              {checking ? '检测中…' : '重新检测'}
+              {checking ? t('settings.deps.checking') : t('settings.deps.recheck')}
             </button>
           </div>
-          {deps.loading && <p className="muted">检测中…</p>}
+          {deps.loading && <p className="muted">{t('settings.deps.checking')}</p>}
           {deps.error && (
             <div className="alert error" role="alert">
               {deps.error}
@@ -84,13 +86,13 @@ export function SettingsPage() {
           {deps.data && (
             <div className="table-wrap">
               <table className="table">
-                <caption className="visually-hidden">外部命令依赖检测结果</caption>
+                <caption className="visually-hidden">{t('settings.deps.caption')}</caption>
                 <thead>
                   <tr>
-                    <th scope="col">命令</th>
-                    <th scope="col">状态</th>
-                    <th scope="col">版本</th>
-                    <th scope="col">说明</th>
+                    <th scope="col">{t('settings.deps.colCommand')}</th>
+                    <th scope="col">{t('common.status')}</th>
+                    <th scope="col">{t('settings.deps.colVersion')}</th>
+                    <th scope="col">{t('settings.deps.colNote')}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -99,15 +101,17 @@ export function SettingsPage() {
                       <td className="mono">{dep.command}</td>
                       <td>
                         <span className={dep.found && dep.executable ? 'tag ok' : 'tag failed'}>
-                          {dep.found && dep.executable ? '可用' : '不可用'}
+                          {dep.found && dep.executable
+                            ? t('settings.deps.available')
+                            : t('settings.deps.unavailable')}
                         </span>
                       </td>
                       <td className="small">{dep.version ?? '—'}</td>
                       <td className="small">
-                        {dep.conditional ? '按仓库类型条件需要' : '必需'}
-                        {dep.minVersion ? `，要求 ≥ ${dep.minVersion}` : ''}
-                        {dep.note ? `：${dep.note}` : ''}
-                        {dep.error ? `：${dep.error}` : ''}
+                        {dep.conditional ? t('settings.deps.conditional') : t('settings.deps.required')}
+                        {dep.minVersion ? t('settings.deps.minVersion', { version: dep.minVersion }) : ''}
+                        {dep.note ? `: ${dep.note}` : ''}
+                        {dep.error ? `: ${dep.error}` : ''}
                       </td>
                     </tr>
                   ))}
@@ -118,11 +122,11 @@ export function SettingsPage() {
         </section>
 
         <section className="card" aria-labelledby="password-title">
-          <h2 id="password-title">管理员口令</h2>
+          <h2 id="password-title">{t('settings.password.title')}</h2>
           <form className="form" onSubmit={changePassword} aria-describedby={ids.hint}>
             {auth.data?.loginRequired && (
               <label htmlFor={ids.current}>
-                当前口令
+                {t('settings.password.current')}
                 <input
                   id={ids.current}
                   type="password"
@@ -133,7 +137,7 @@ export function SettingsPage() {
               </label>
             )}
             <label htmlFor={ids.next}>
-              新口令
+              {t('settings.password.next')}
               <input
                 id={ids.next}
                 type="password"
@@ -145,11 +149,11 @@ export function SettingsPage() {
               />
             </label>
             <p className="muted small" id={ids.hint}>
-              至少 6 位。当前版本仅支持管理员口令登录，统一登录（OA / LDAP）为预留扩展点。
+              {t('settings.password.hint')}
             </p>
             <div className="actions">
               <button className="primary" type="submit" disabled={busy}>
-                更新口令
+                {t('settings.password.submit')}
               </button>
             </div>
           </form>

@@ -35,7 +35,6 @@ import {
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { verifyBundledCodeGraph } from './package-codegraph.mjs';
-import { createWriteStream } from 'node:fs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -50,6 +49,10 @@ const PKG_NAME = 'code-review-hub';
 const PKG_DIR = join(OUT_ROOT, PKG_NAME);
 const WITH_SVN = opt('--with-svn', '');
 const MAKE_ZIP = !flag('--no-zip');
+const PKG_VERSION = opt(
+  '--version',
+  JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version
+).replace(/^v/, '');
 
 const log = (msg) => console.log(`[package] ${msg}`);
 const fail = (msg) => {
@@ -90,8 +93,27 @@ if (!existsSync(join(ROOT, 'web', 'dist', 'index.html'))) fail('web build missin
 // Locate the ocr native binary. The npm package ships it under the platform
 // package; we copy it as ocr.exe so `which('ocr')` finds a real PE image.
 function findOcrExe() {
+  let globalRoot = '';
+  try {
+    globalRoot = run('npm', ['root', '-g'], { shell: true }).trim();
+  } catch {
+    // ignore
+  }
   const candidates = [
     join(ROOT, 'node_modules', '@smallfishworld', 'ocr-win32-x64', 'bin', 'opencodereview.exe'),
+    globalRoot &&
+      join(
+        globalRoot,
+        '@smallfishworld',
+        'open-code-review-svn',
+        'node_modules',
+        '@smallfishworld',
+        'ocr-win32-x64',
+        'bin',
+        'opencodereview.exe'
+      ),
+    globalRoot &&
+      join(globalRoot, '@smallfishworld', 'ocr-win32-x64', 'bin', 'opencodereview.exe'),
     join(
       process.env.APPDATA ?? '',
       'npm',
@@ -113,7 +135,7 @@ function findOcrExe() {
       'bin',
       'opencodereview.exe'
     ),
-  ];
+  ].filter(Boolean);
   return candidates.find((p) => existsSync(p)) ?? null;
 }
 
@@ -235,7 +257,7 @@ ENDLOCAL
 writeFileSync(join(PKG_DIR, 'start-background.cmd'), startHidden.replace(/\r?\n/g, '\r\n'), 'utf8');
 
 // ---------------------------------------------------------------- docs
-const pkgVersion = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version;
+const pkgVersion = PKG_VERSION;
 const readme = `# 代码评审平台（Windows 免安装包 v${pkgVersion}）
 
 解压后直接运行 \`start.cmd\`，浏览器打开 http://localhost:3000/ 。

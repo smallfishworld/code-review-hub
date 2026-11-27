@@ -1,15 +1,16 @@
 import type { ReactNode } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
+import { LanguageSwitcher, useI18n, type MessageKey } from '../i18n';
 
 interface NavItem {
   to: string;
-  label: string;
+  labelKey: MessageKey;
   icon: ReactNode;
 }
 
 interface NavGroup {
-  title: string;
+  titleKey: MessageKey;
   items: NavItem[];
 }
 
@@ -26,11 +27,11 @@ const iconProps = {
 
 const NAV_GROUPS: NavGroup[] = [
   {
-    title: '评审工作台',
+    titleKey: 'nav.group.workspace',
     items: [
       {
         to: '/repos',
-        label: '仓库管理',
+        labelKey: 'nav.repos',
         icon: (
           <svg {...iconProps}>
             <path d="M3.5 5.5A2 2 0 0 1 5.5 3.5h3.2l1.8 2h4a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2v-9Z" />
@@ -40,7 +41,7 @@ const NAV_GROUPS: NavGroup[] = [
       },
       {
         to: '/monitor',
-        label: '监控规则',
+        labelKey: 'nav.monitor',
         icon: (
           <svg {...iconProps}>
             <path d="M3 10h3l2-5 4 10 2-5h3" />
@@ -49,7 +50,7 @@ const NAV_GROUPS: NavGroup[] = [
       },
       {
         to: '/trigger',
-        label: '手动触发',
+        labelKey: 'nav.trigger',
         icon: (
           <svg {...iconProps}>
             <path d="M6.5 4.8v10.4L15.2 10 6.5 4.8Z" />
@@ -58,7 +59,7 @@ const NAV_GROUPS: NavGroup[] = [
       },
       {
         to: '/tasks',
-        label: '任务与报告',
+        labelKey: 'nav.tasks',
         icon: (
           <svg {...iconProps}>
             <rect x="4" y="3.5" width="12" height="13" rx="2" />
@@ -69,11 +70,11 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    title: '模型与能力',
+    titleKey: 'nav.group.models',
     items: [
       {
         to: '/providers',
-        label: 'LLM Provider',
+        labelKey: 'nav.providers',
         icon: (
           <svg {...iconProps}>
             <rect x="5.5" y="5.5" width="9" height="9" rx="1.8" />
@@ -83,7 +84,7 @@ const NAV_GROUPS: NavGroup[] = [
       },
       {
         to: '/engines',
-        label: '评审引擎',
+        labelKey: 'nav.engines',
         icon: (
           <svg {...iconProps}>
             <path d="M10 3.5 16.5 7 10 10.5 3.5 7 10 3.5Z" />
@@ -93,7 +94,7 @@ const NAV_GROUPS: NavGroup[] = [
       },
       {
         to: '/mcp',
-        label: 'MCP 服务器',
+        labelKey: 'nav.mcp',
         icon: (
           <svg {...iconProps}>
             <path d="M7.5 6.5v-3M12.5 6.5v-3M5.5 6.5h9v3a4.5 4.5 0 0 1-9 0v-3ZM10 14v3" />
@@ -103,11 +104,11 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    title: '系统运维',
+    titleKey: 'nav.group.ops',
     items: [
       {
         to: '/notifications',
-        label: '通知配置',
+        labelKey: 'nav.notifications',
         icon: (
           <svg {...iconProps}>
             <path d="M10 3.5a4.5 4.5 0 0 0-4.5 4.5v2.8l-1.5 2.2h12l-1.5-2.2V8A4.5 4.5 0 0 0 10 3.5Z" />
@@ -117,7 +118,7 @@ const NAV_GROUPS: NavGroup[] = [
       },
       {
         to: '/logs',
-        label: '运行日志',
+        labelKey: 'nav.logs',
         icon: (
           <svg {...iconProps}>
             <rect x="3.5" y="4" width="13" height="12" rx="2" />
@@ -127,7 +128,7 @@ const NAV_GROUPS: NavGroup[] = [
       },
       {
         to: '/settings',
-        label: '系统设置',
+        labelKey: 'nav.settings',
         icon: (
           <svg {...iconProps}>
             <circle cx="10" cy="10" r="2.6" />
@@ -141,6 +142,7 @@ const NAV_GROUPS: NavGroup[] = [
 
 export function Layout() {
   const { status, logout } = useAuth();
+  const { t } = useI18n();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -149,26 +151,26 @@ export function Layout() {
     navigate('/login', { replace: true });
   };
 
-  const userName = status?.displayName ?? status?.username ?? '未登录';
+  const userName = status?.displayName ?? status?.username ?? t('common.notLoggedIn');
   const userInitial = userName.slice(0, 1).toUpperCase();
 
   return (
     <div className="app-shell">
       {/* First tab stop: bypasses the repeated navigation. */}
       <a href="#main-content" className="skip-link">
-        跳到主要内容
+        {t('nav.skipToContent')}
       </a>
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-text">
-            <span className="brand-title">代码评审平台</span>
-            <span className="brand-sub">SVN · Git 智能评审</span>
+            <span className="brand-title">{t('app.name')}</span>
+            <span className="brand-sub">{t('app.subtitle')}</span>
           </div>
         </div>
-        <nav aria-label="主导航" className="nav-groups">
+        <nav aria-label={t('nav.mainAria')} className="nav-groups">
           {NAV_GROUPS.map((group) => (
-            <div key={group.title} className="nav-group">
-              <div className="nav-group-label">{group.title}</div>
+            <div key={group.titleKey} className="nav-group">
+              <div className="nav-group-label">{t(group.titleKey)}</div>
               <div className="nav-group-items">
                 {group.items.map((item) => (
                   <NavLink
@@ -178,25 +180,30 @@ export function Layout() {
                     aria-current={location.pathname === item.to ? 'page' : undefined}
                   >
                     {item.icon}
-                    <span>{item.label}</span>
+                    <span>{t(item.labelKey)}</span>
                   </NavLink>
                 ))}
               </div>
             </div>
           ))}
         </nav>
-        <div className="sidebar-footer">
-          <div className="user-badge">
-            <span className="user-avatar" aria-hidden="true">
-              {userInitial}
-            </span>
-            <span className="user-name" title={userName}>
-              {userName}
-            </span>
+        <div className="sidebar-bottom">
+          <div className="sidebar-lang">
+            <LanguageSwitcher />
           </div>
-          <button type="button" className="link small" onClick={doLogout}>
-            退出
-          </button>
+          <div className="sidebar-footer">
+            <div className="user-badge">
+              <span className="user-avatar" aria-hidden="true">
+                {userInitial}
+              </span>
+              <span className="user-name" title={userName}>
+                {userName}
+              </span>
+            </div>
+            <button type="button" className="link small" onClick={doLogout}>
+              {t('common.logout')}
+            </button>
+          </div>
         </div>
       </aside>
       <main className="content" id="main-content" tabIndex={-1}>

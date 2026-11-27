@@ -4,14 +4,15 @@ import { api, type MemoryEntry, type MemoryList } from '../api/client';
 import { errorText, useApi, usePageTitle } from '../api/hooks';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useFlash } from '../components/Toast';
+import { useI18n, type MessageKey } from '../i18n';
 
-const KIND_LABEL: Record<string, string> = {
-  architecture: '架构',
-  convention: '约定',
-  pitfall: '坑点',
-  suppression: '误报抑制',
-  history: '历史修复',
-  glossary: '术语',
+const KIND_KEYS: Record<MemoryEntry['kind'], MessageKey> = {
+  architecture: 'memory.kind.architecture',
+  convention: 'memory.kind.convention',
+  pitfall: 'memory.kind.pitfall',
+  suppression: 'memory.kind.suppression',
+  history: 'memory.kind.history',
+  glossary: 'memory.kind.glossary',
 };
 
 interface FormState {
@@ -31,9 +32,10 @@ const empty: FormState = {
 };
 
 export function RepoMemoryPage() {
+  const { t } = useI18n();
   const { id } = useParams<{ id: string }>();
   const repoId = Number(id);
-  usePageTitle('项目记忆');
+  usePageTitle(t('memory.pageTitle'));
   const memory = useApi(() => api.get<MemoryList>(`/api/repos/${repoId}/memory?status=all`));
   const preview = useApi(() =>
     api.get<{ text: string; count: number }>(`/api/repos/${repoId}/memory/preview`)
@@ -76,10 +78,10 @@ export function RepoMemoryPage() {
     try {
       if (editingId === null) {
         await api.post(`/api/repos/${repoId}/memory`, payload);
-        flash.ok('记忆已新增');
+        flash.ok(t('memory.toast.created'));
       } else {
         await api.put(`/api/repos/${repoId}/memory/${editingId}`, payload);
-        flash.ok('记忆已更新');
+        flash.ok(t('memory.toast.updated'));
       }
       setForm(empty);
       setEditingId(null);
@@ -104,15 +106,15 @@ export function RepoMemoryPage() {
 
   const remove = async (m: MemoryEntry) => {
     const ok = await confirm({
-      title: `删除记忆「${m.title}」？`,
-      body: '删除后无法恢复；被 suppression 引用的指纹也会失效（同类问题可能复报）。',
-      confirmLabel: '删除',
+      title: t('memory.confirm.deleteTitle', { title: m.title }),
+      body: t('memory.confirm.deleteBody'),
+      confirmLabel: t('common.delete'),
       danger: true,
     });
     if (!ok) return;
     try {
       await api.del(`/api/repos/${repoId}/memory/${m.id}`);
-      flash.ok('已删除');
+      flash.ok(t('common.deleted'));
       await memory.reload();
     } catch (err) {
       flash.fail(errorText(err));
@@ -124,7 +126,7 @@ export function RepoMemoryPage() {
       const res = await api.post<{ updated: number; created: number }>(
         `/api/repos/${repoId}/memory/reload`
       );
-      flash.ok(`markdown 重载完成：更新 ${res.updated} 条，新增 ${res.created} 条`);
+      flash.ok(t('memory.toast.reloaded', { updated: res.updated, created: res.created }));
       await memory.reload();
     } catch (err) {
       flash.fail(errorText(err));
@@ -137,7 +139,7 @@ export function RepoMemoryPage() {
       const res = await api.post<{ updated: number; created: number }>(
         `/api/repos/${repoId}/memory/profile`
       );
-      flash.ok(`画像已生成：新增 ${res.created} 条，更新 ${res.updated} 条`);
+      flash.ok(t('memory.toast.profileGenerated', { created: res.created, updated: res.updated }));
       await Promise.all([memory.reload(), preview.reload()]);
     } catch (err) {
       flash.fail(errorText(err));
@@ -151,16 +153,14 @@ export function RepoMemoryPage() {
       <div className="page-head">
         <div className="page-title-group">
           <Link to="/repos" className="back-link">
-            ← 返回仓库管理
+            {t('memory.back')}
           </Link>
-          <h1>项目记忆（仓库 #{repoId}）</h1>
-          <p className="page-subtitle">
-            随评审自动蒸馏与误报沉淀，也可手工维护（data/memory/{repoId}/ 编辑后重载生效，预算 1500 token）
-          </p>
+          <h1>{t('memory.heading', { id: repoId })}</h1>
+          <p className="page-subtitle">{t('memory.subtitle', { id: repoId })}</p>
         </div>
         <div className="row-actions">
           <button type="button" className="secondary" onClick={() => void reloadMarkdown()}>
-            重载 markdown
+            {t('memory.reloadMarkdown')}
           </button>
           <button
             type="button"
@@ -168,37 +168,39 @@ export function RepoMemoryPage() {
             onClick={() => void generateProfile()}
             disabled={profileBusy}
           >
-            {profileBusy ? '生成中…' : '生成项目画像'}
+            {profileBusy ? t('memory.generatingProfile') : t('memory.generateProfile')}
           </button>
         </div>
       </div>
       {memory.data && !memory.data.ftsAvailable && (
-        <div className="alert info">
-          当前环境 FTS5/trigram 不可用，全文检索已自动降级为 LIKE。
-        </div>
+        <div className="alert info">{t('memory.ftsFallback')}</div>
       )}
 
       <div className="split providers-split">
         <section className="card" aria-labelledby="memory-form-title">
-          <h2 id="memory-form-title">{editingId === null ? '新增记忆' : '编辑记忆'}</h2>
+          <h2 id="memory-form-title">
+            {editingId === null ? t('memory.form.createTitle') : t('memory.form.editTitle')}
+          </h2>
           <form className="form" onSubmit={save}>
             <div className="two-col">
               <label htmlFor={ids.kind}>
-                类型
+                {t('common.type')}
                 <select
                   id={ids.kind}
                   value={form.kind}
                   onChange={(e) => setForm({ ...form, kind: e.target.value as MemoryEntry['kind'] })}
                 >
-                  {Object.entries(KIND_LABEL).map(([value, label]) => (
-                    <option key={value} value={value}>
-                      {label}
-                    </option>
-                  ))}
+                  {(Object.entries(KIND_KEYS) as [MemoryEntry['kind'], MessageKey][]).map(
+                    ([value, key]) => (
+                      <option key={value} value={value}>
+                        {t(key)}
+                      </option>
+                    )
+                  )}
                 </select>
               </label>
               <label htmlFor={ids.confidence}>
-                置信度（0.01–0.99）
+                {t('memory.form.confidence')}
                 <input
                   id={ids.confidence}
                   type="number"
@@ -211,16 +213,16 @@ export function RepoMemoryPage() {
               </label>
             </div>
             <label htmlFor={ids.scope}>
-              作用范围（路径前缀，可选）
+              {t('memory.form.scope')}
               <input
                 id={ids.scope}
                 value={form.scope}
                 onChange={(e) => setForm({ ...form, scope: e.target.value })}
-                placeholder="留空 = 全仓库，例如 src/utils"
+                placeholder={t('memory.form.scopePlaceholder')}
               />
             </label>
             <label htmlFor={ids.title}>
-              标题
+              {t('memory.form.title')}
               <input
                 id={ids.title}
                 value={form.title}
@@ -229,7 +231,7 @@ export function RepoMemoryPage() {
               />
             </label>
             <label htmlFor={ids.body}>
-              正文
+              {t('memory.form.body')}
               <textarea
                 id={ids.body}
                 value={form.body}
@@ -240,7 +242,7 @@ export function RepoMemoryPage() {
             </label>
             <div className="actions">
               <button className="primary" type="submit" disabled={busy}>
-                保存
+                {t('common.save')}
               </button>
               {editingId !== null && (
                 <button
@@ -251,7 +253,7 @@ export function RepoMemoryPage() {
                     setForm(empty);
                   }}
                 >
-                  取消编辑
+                  {t('common.cancelEdit')}
                 </button>
               )}
             </div>
@@ -260,24 +262,24 @@ export function RepoMemoryPage() {
 
         <div className="grow stack">
           <section className="card" aria-labelledby="memory-list-title">
-            <h2 id="memory-list-title">记忆条目</h2>
+            <h2 id="memory-list-title">{t('memory.list.title')}</h2>
             {memory.data && memory.data.items.length === 0 && (
-              <p className="muted">暂无记忆。可点击「生成项目画像」冷启动，或评审后自动沉淀。</p>
+              <p className="muted">{t('memory.list.empty')}</p>
             )}
             {memory.data && memory.data.items.length > 0 && (
               <div className="table-wrap">
                 <table className="table">
-                  <caption className="visually-hidden">项目记忆条目</caption>
+                  <caption className="visually-hidden">{t('memory.list.caption')}</caption>
                   <thead>
                     <tr>
-                      <th scope="col">类型</th>
-                      <th scope="col">标题</th>
-                      <th scope="col">范围</th>
-                      <th scope="col">置信度</th>
-                      <th scope="col">命中/确认</th>
-                      <th scope="col">状态</th>
+                      <th scope="col">{t('common.type')}</th>
+                      <th scope="col">{t('memory.list.colTitle')}</th>
+                      <th scope="col">{t('memory.list.colScope')}</th>
+                      <th scope="col">{t('memory.list.colConfidence')}</th>
+                      <th scope="col">{t('memory.list.colHits')}</th>
+                      <th scope="col">{t('common.status')}</th>
                       <th scope="col" className="actions-cell">
-                        操作
+                        {t('common.actions')}
                       </th>
                     </tr>
                   </thead>
@@ -285,32 +287,56 @@ export function RepoMemoryPage() {
                     {memory.data.items.map((m) => (
                       <tr key={m.id}>
                         <td>
-                          <span className="tag">{KIND_LABEL[m.kind] ?? m.kind}</span>
+                          <span className="tag">
+                            {KIND_KEYS[m.kind] ? t(KIND_KEYS[m.kind]) : m.kind}
+                          </span>
                         </td>
                         <td className="ellipsis" title={m.title}>
                           {m.title}
                         </td>
-                        <td className="mono small">{m.scope ?? '全仓库'}</td>
+                        <td className="mono small">{m.scope ?? t('memory.list.allRepo')}</td>
                         <td className="small">{m.confidence.toFixed(2)}</td>
                         <td className="small">
                           {m.hits} / {m.feedbackCount}
                         </td>
                         <td>
                           <span className={`tag ${m.status === 'active' ? 'ok' : 'muted'}`}>
-                            {m.status === 'active' ? '生效' : m.status === 'archived' ? '归档' : m.status}
+                            {m.status === 'active'
+                              ? t('memory.list.statusActive')
+                              : m.status === 'archived'
+                                ? t('memory.list.statusArchived')
+                                : m.status}
                           </span>
                         </td>
                         <td className="actions-cell">
                           <div className="row-actions">
                             <button type="button" className="link" onClick={() => edit(m)}>
-                              编辑<span className="visually-hidden">记忆 {m.title}</span>
+                              {t('common.edit')}
+                              <span className="visually-hidden">
+                                {t('memory.list.srMemory', { title: m.title })}
+                              </span>
                             </button>
-                            <button type="button" className="link" onClick={() => void toggleStatus(m)}>
-                              {m.status === 'active' ? '停用' : '恢复'}
-                              <span className="visually-hidden">记忆 {m.title}</span>
+                            <button
+                              type="button"
+                              className="link"
+                              onClick={() => void toggleStatus(m)}
+                            >
+                              {m.status === 'active'
+                                ? t('common.disable')
+                                : t('memory.list.restore')}
+                              <span className="visually-hidden">
+                                {t('memory.list.srMemory', { title: m.title })}
+                              </span>
                             </button>
-                            <button type="button" className="link danger" onClick={() => void remove(m)}>
-                              删除<span className="visually-hidden">记忆 {m.title}</span>
+                            <button
+                              type="button"
+                              className="link danger"
+                              onClick={() => void remove(m)}
+                            >
+                              {t('common.delete')}
+                              <span className="visually-hidden">
+                                {t('memory.list.srMemory', { title: m.title })}
+                              </span>
                             </button>
                           </div>
                         </td>
@@ -323,9 +349,9 @@ export function RepoMemoryPage() {
           </section>
 
           <section className="card" aria-labelledby="memory-preview-title">
-            <h2 id="memory-preview-title">注入预览</h2>
-            <p className="muted small">下一次评审将注入的记忆内容（按得分排序、预算截断后）。</p>
-            <pre className="raw">{preview.data?.text || '（无可注入内容）'}</pre>
+            <h2 id="memory-preview-title">{t('memory.preview.title')}</h2>
+            <p className="muted small">{t('memory.preview.subtitle')}</p>
+            <pre className="raw">{preview.data?.text || t('memory.preview.empty')}</pre>
           </section>
         </div>
       </div>

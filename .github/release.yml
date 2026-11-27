@@ -1,0 +1,31 @@
+# GitHub auto-generated release notes configuration
+changelog:
+  exclude:
+    labels:
+      - ignore-for-release
+    authors:
+      - dependabot
+  categories:
+    - title: "✨ New Features / 新功能"
+      labels:
+        - enhancement
+        - feature
+    - title: "🐛 Bug Fixes / 问题修复"
+      labels:
+        - bug
+        - fix
+    - title: "🌐 Internationalization / 国际化"
+      labels:
+        - i18n
+    - title: "📚 Documentation / 文档"
+      labels:
+        - documentation
+        - docs
+    - title: "📦 Packaging & CI / 打包与流水线"
+      labels:
+        - ci
+        - build
+        - release
+    - title: "🔧 Other Changes / 其他变更"
+      labels:
+        - "*"

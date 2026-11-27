@@ -13,22 +13,42 @@ import {
 } from '../api/client';
 import { errorText, useApi, usePageTitle } from '../api/hooks';
 import { useFlash } from '../components/Toast';
+import { useI18n, type MessageKey } from '../i18n';
 
-const STATUS_LABEL: Record<string, string> = {
-  queued: '排队中',
-  running: '执行中',
-  succeeded: '成功',
-  failed: '失败',
-  cancelled: '已取消',
+const STATUS_KEYS: Record<string, MessageKey> = {
+  queued: 'tasks.status.queued',
+  running: 'tasks.status.running',
+  succeeded: 'tasks.status.succeeded',
+  failed: 'tasks.status.failed',
+  cancelled: 'tasks.status.cancelled',
 };
 
-const FEEDBACK_LABEL: Record<ReviewVerdict, string> = {
-  false_positive: '已标误报',
-  fixed: '已标修复',
-  wont_fix: '已标不修复',
+const FEEDBACK_KEYS: Record<ReviewVerdict, MessageKey> = {
+  false_positive: 'tasks.feedback.false_positive',
+  fixed: 'tasks.feedback.fixed',
+  wont_fix: 'tasks.feedback.wont_fix',
+};
+
+const SEVERITY_KEYS: Record<string, MessageKey> = {
+  critical: 'tasks.severity.critical',
+  high: 'tasks.severity.high',
+  medium: 'tasks.severity.medium',
+  low: 'tasks.severity.low',
+};
+
+const CATEGORY_KEYS: Record<string, MessageKey> = {
+  bug: 'tasks.category.bug',
+  security: 'tasks.category.security',
+  performance: 'tasks.category.performance',
+  maintainability: 'tasks.category.maintainability',
+  test: 'tasks.category.test',
+  style: 'tasks.category.style',
+  documentation: 'tasks.category.documentation',
+  other: 'tasks.category.other',
 };
 
 function RetryTaskButton({ taskId, className }: { taskId: number; className: string }) {
+  const { t } = useI18n();
   const [busy, setBusy] = useState(false);
   const flash = useFlash();
   const navigate = useNavigate();
@@ -37,7 +57,7 @@ function RetryTaskButton({ taskId, className }: { taskId: number; className: str
     setBusy(true);
     try {
       const { task } = await api.post<{ task: Task }>(`/api/tasks/${taskId}/retry`);
-      flash.ok(`已重新触发评审任务 #${task.id}`);
+      flash.ok(t('tasks.toast.retried', { id: task.id }));
       void navigate(`/tasks/${task.id}`);
     } catch (err) {
       flash.fail(errorText(err));
@@ -48,44 +68,15 @@ function RetryTaskButton({ taskId, className }: { taskId: number; className: str
 
   return (
     <button type="button" className={className} onClick={retry} disabled={busy}>
-      {busy ? '重试中…' : '重试'}
-      <span className="visually-hidden">任务 #{taskId}</span>
+      {busy ? t('common.retrying') : t('common.retry')}
+      <span className="visually-hidden">{t('trigger.srTask', { id: taskId })}</span>
     </button>
   );
 }
 
-/** ocr severity values (critical/high/medium/low) → 中文标签 + tag class. */
-const SEVERITY_LABEL: Record<string, string> = {
-  critical: '严重',
-  high: '高',
-  medium: '中',
-  low: '低',
-};
-
-/** ocr issue categories → 中文标签. */
-const CATEGORY_LABEL: Record<string, string> = {
-  bug: '缺陷',
-  security: '安全',
-  performance: '性能',
-  maintainability: '可维护性',
-  test: '测试',
-  style: '风格',
-  documentation: '文档',
-  other: '其他',
-};
-
-function severityLabel(value: string | null): string {
-  if (!value) return '—';
-  return SEVERITY_LABEL[value.toLowerCase()] ?? value;
-}
-
-function categoryLabel(value: string | null | undefined): string {
-  if (!value) return '—';
-  return CATEGORY_LABEL[value.toLowerCase()] ?? value;
-}
-
 export function TasksPage() {
-  usePageTitle('任务与报告');
+  const { t, formatTime } = useI18n();
+  usePageTitle(t('tasks.pageTitle'));
   const [repoId, setRepoId] = useState('');
   const [repoType, setRepoType] = useState('');
   const [status, setStatus] = useState('');
@@ -130,30 +121,30 @@ export function TasksPage() {
     <div>
       <div className="page-head">
         <div className="page-title-group">
-          <h1>任务与报告</h1>
-          <p className="page-subtitle">检索历史评审任务、查看缺陷报告并沉淀误报与修复反馈</p>
+          <h1>{t('tasks.pageTitle')}</h1>
+          <p className="page-subtitle">{t('tasks.subtitle')}</p>
         </div>
         <div className="actions">
           {hasFilters && (
             <button type="button" className="link" onClick={resetFilters}>
-              清除筛选
+              {t('tasks.clearFilters')}
             </button>
           )}
           <button type="button" className="secondary" onClick={() => void tasks.reload()}>
-            刷新
+            {t('common.refresh')}
           </button>
         </div>
       </div>
 
       <section className="card toolbar-card" aria-labelledby="task-filters-title">
         <h2 id="task-filters-title" className="visually-hidden">
-          筛选
+          {t('tasks.filtersTitle')}
         </h2>
         <div className="filter-row">
           <label htmlFor={ids.repo}>
-            仓库
+            {t('tasks.filter.repo')}
             <select id={ids.repo} value={repoId} onChange={(e) => setRepoId(e.target.value)}>
-              <option value="">全部</option>
+              <option value="">{t('common.all')}</option>
               {repos.data?.map((r) => (
                 <option key={r.id} value={r.id}>
                   {r.name}
@@ -162,54 +153,54 @@ export function TasksPage() {
             </select>
           </label>
           <label htmlFor={ids.repoType}>
-            仓库类型
+            {t('tasks.filter.repoType')}
             <select id={ids.repoType} value={repoType} onChange={(e) => setRepoType(e.target.value)}>
-              <option value="">全部</option>
+              <option value="">{t('common.all')}</option>
               <option value="svn">SVN</option>
               <option value="git">Git</option>
             </select>
           </label>
           <label htmlFor={ids.status}>
-            状态
+            {t('tasks.filter.status')}
             <select id={ids.status} value={status} onChange={(e) => setStatus(e.target.value)}>
-              <option value="">全部</option>
-              {Object.entries(STATUS_LABEL).map(([value, label]) => (
+              <option value="">{t('common.all')}</option>
+              {Object.entries(STATUS_KEYS).map(([value, key]) => (
                 <option key={value} value={value}>
-                  {label}
+                  {t(key)}
                 </option>
               ))}
             </select>
           </label>
           <label htmlFor={ids.trigger}>
-            触发方式
+            {t('tasks.filter.trigger')}
             <select id={ids.trigger} value={trigger} onChange={(e) => setTrigger(e.target.value)}>
-              <option value="">全部</option>
-              <option value="manual">手动</option>
-              <option value="auto">自动监控</option>
+              <option value="">{t('common.all')}</option>
+              <option value="manual">{t('tasks.trigger.manual')}</option>
+              <option value="auto">{t('tasks.trigger.auto')}</option>
             </select>
           </label>
           <label htmlFor={ids.author}>
-            作者
+            {t('tasks.filter.author')}
             <input
               id={ids.author}
               value={author}
               onChange={(e) => setAuthor(e.target.value)}
-              placeholder="精确匹配"
+              placeholder={t('tasks.filter.authorPlaceholder')}
             />
           </label>
           <label htmlFor={ids.node}>
-            节点
+            {t('tasks.filter.node')}
             <input
               id={ids.node}
               value={node}
               onChange={(e) => setNode(e.target.value)}
-              placeholder="包含匹配"
+              placeholder={t('tasks.filter.nodePlaceholder')}
             />
           </label>
         </div>
       </section>
 
-      {tasks.loading && <p className="muted">加载中…</p>}
+      {tasks.loading && <p className="muted">{t('common.loading')}</p>}
       {tasks.error && (
         <div className="alert error" role="alert">
           {tasks.error}
@@ -218,25 +209,26 @@ export function TasksPage() {
       {tasks.data && (
         <section className="card" aria-labelledby="task-list-title">
           <h2 id="task-list-title">
-            任务列表 <span className="muted small">共 {tasks.data.total} 个</span>
+            {t('tasks.list.title')}{' '}
+            <span className="muted small">{t('tasks.list.total', { total: tasks.data.total })}</span>
           </h2>
-          {tasks.data.items.length === 0 && <p className="muted">没有符合条件的任务。</p>}
+          {tasks.data.items.length === 0 && <p className="muted">{t('tasks.list.empty')}</p>}
           {tasks.data.items.length > 0 && (
             <div className="table-wrap">
               <table className="table">
-                <caption className="visually-hidden">评审任务列表</caption>
+                <caption className="visually-hidden">{t('tasks.list.caption')}</caption>
                 <thead>
                   <tr>
-                    <th scope="col">任务</th>
-                    <th scope="col">仓库</th>
-                    <th scope="col">节点</th>
-                    <th scope="col">作者</th>
-                    <th scope="col">触发</th>
-                    <th scope="col">模型</th>
-                    <th scope="col">状态</th>
-                    <th scope="col">创建时间</th>
+                    <th scope="col">{t('tasks.col.task')}</th>
+                    <th scope="col">{t('tasks.col.repo')}</th>
+                    <th scope="col">{t('tasks.col.node')}</th>
+                    <th scope="col">{t('tasks.col.author')}</th>
+                    <th scope="col">{t('tasks.col.trigger')}</th>
+                    <th scope="col">{t('tasks.col.model')}</th>
+                    <th scope="col">{t('common.status')}</th>
+                    <th scope="col">{t('tasks.col.createdAt')}</th>
                     <th scope="col" className="actions-cell">
-                      操作
+                      {t('common.actions')}
                     </th>
                   </tr>
                 </thead>
@@ -249,10 +241,18 @@ export function TasksPage() {
                       <td>{repos.data?.find((r) => r.id === task.repoId)?.name ?? task.repoId}</td>
                       <td className="mono">{task.node}</td>
                       <td>{task.author ?? '—'}</td>
-                      <td>{task.trigger === 'auto' ? '自动监控' : '手动'}</td>
-                      <td className="nowrap small">{task.providerLabel ?? '默认模型'}</td>
                       <td>
-                        <span className={`tag ${task.status}`}>{STATUS_LABEL[task.status]}</span>
+                        {task.trigger === 'auto'
+                          ? t('tasks.trigger.auto')
+                          : t('tasks.trigger.manual')}
+                      </td>
+                      <td className="nowrap small">
+                        {task.providerLabel ?? t('tasks.defaultModel')}
+                      </td>
+                      <td>
+                        <span className={`tag ${task.status}`}>
+                          {STATUS_KEYS[task.status] ? t(STATUS_KEYS[task.status]) : task.status}
+                        </span>
                       </td>
                       <td className="small">{formatTime(task.createdAt)}</td>
                       <td className="actions-cell">
@@ -279,7 +279,8 @@ export function TaskDetailPage() {
 }
 
 function TaskDetail({ taskId }: { taskId: number }) {
-  usePageTitle(`任务 #${taskId}`);
+  const { t, formatTime } = useI18n();
+  usePageTitle(t('tasks.detail.pageTitle', { id: taskId }));
   const task = useApi(() => api.get<Task>(`/api/tasks/${taskId}`), [taskId]);
   const report = useApi(
     () => api.get<ReportDetail>(`/api/tasks/${taskId}/report`).catch(() => null),
@@ -304,6 +305,18 @@ function TaskDetail({ taskId }: { taskId: number }) {
   const feedbackDialog = useRef<HTMLDialogElement>(null);
   const feedbackTitleId = useId();
   const wontFix = pendingFeedback?.verdict === 'wont_fix';
+
+  const severityLabel = (value: string | null): string => {
+    if (!value) return '—';
+    const key = SEVERITY_KEYS[value.toLowerCase()];
+    return key ? t(key) : value;
+  };
+
+  const categoryLabel = (value: string | null | undefined): string => {
+    if (!value) return '—';
+    const key = CATEGORY_KEYS[value.toLowerCase()];
+    return key ? t(key) : value;
+  };
 
   useEffect(() => {
     const dialog = feedbackDialog.current;
@@ -332,8 +345,8 @@ function TaskDetail({ taskId }: { taskId: number }) {
       });
       await report.reload();
       closeFeedback();
-      const label = FEEDBACK_LABEL[verdict];
-      flash.ok(res.memoryId === null ? label : `${label}，已关联项目记忆`);
+      const label = t(FEEDBACK_KEYS[verdict]);
+      flash.ok(res.memoryId === null ? label : t('tasks.detail.feedbackLinked', { label }));
     } catch (err) {
       if ((err as ApiError)?.status === 409) {
         await report.reload();
@@ -346,9 +359,6 @@ function TaskDetail({ taskId }: { taskId: number }) {
     }
   };
 
-  // The page is the "查看进度" target after triggering a review, so it has to
-  // follow the task on its own — otherwise it shows 执行中 forever until the
-  // user finds the 刷新 button. Poll while active, then load the report once.
   const status = task.data?.status;
   const active = status === 'queued' || status === 'running';
   const reloadTask = task.reload;
@@ -369,7 +379,7 @@ function TaskDetail({ taskId }: { taskId: number }) {
     setBusy(true);
     try {
       await api.post(`/api/tasks/${taskId}/cancel`);
-      flash.ok('已请求取消任务');
+      flash.ok(t('tasks.toast.cancelled'));
       await task.reload();
     } catch (err) {
       flash.fail(errorText(err));
@@ -378,25 +388,26 @@ function TaskDetail({ taskId }: { taskId: number }) {
     }
   };
 
-  const t = task.data;
-  const refresh = () => Promise.all([task.reload(), report.reload(), mcpAudit.reload(), memoryAudit.reload()]);
+  const item = task.data;
+  const refresh = () =>
+    Promise.all([task.reload(), report.reload(), mcpAudit.reload(), memoryAudit.reload()]);
 
   return (
     <div>
       <div className="page-head">
         <div className="page-title-group">
           <Link to="/tasks" className="back-link">
-            ← 返回任务列表
+            {t('tasks.detail.back')}
           </Link>
-          <h1>任务 #{taskId}</h1>
+          <h1>{t('tasks.detail.pageTitle', { id: taskId })}</h1>
         </div>
         <div className="actions">
           <button type="button" className="secondary" onClick={() => void refresh()}>
-            刷新
+            {t('common.refresh')}
           </button>
           {active && (
             <button type="button" className="danger" onClick={cancel} disabled={busy}>
-              取消任务
+              {t('tasks.detail.cancel')}
             </button>
           )}
           {status === 'failed' && <RetryTaskButton taskId={taskId} className="secondary" />}
@@ -408,50 +419,61 @@ function TaskDetail({ taskId }: { taskId: number }) {
           {task.error}
         </div>
       )}
-      {t && (
+      {item && (
         <section className="card" aria-labelledby="task-summary-title">
-          <h2 id="task-summary-title">概览</h2>
+          <h2 id="task-summary-title">{t('tasks.detail.overview')}</h2>
           <div className="stat-grid cols-4">
             <div className="stat">
-              <span className="stat-label">状态</span>
-              <span className={`stat-value tag ${t.status}`}>{STATUS_LABEL[t.status]}</span>
-            </div>
-            <div className="stat">
-              <span className="stat-label">节点</span>
-              <span className="stat-value mono">{t.node}</span>
-            </div>
-            <div className="stat">
-              <span className="stat-label">作者</span>
-              <span className="stat-value">{t.author ?? '—'}</span>
-            </div>
-            <div className="stat">
-              <span className="stat-label">触发方式</span>
-              <span className="stat-value">{t.trigger === 'auto' ? '自动监控' : '手动'}</span>
-            </div>
-            <div className="stat">
-              <span className="stat-label">评审模型</span>
-              <span className="stat-value small">{t.providerLabel ?? '默认模型'}</span>
-            </div>
-            <div className="stat">
-              <span className="stat-label">评审引擎</span>
-              <span className="stat-value">{report.data?.report.engine ?? 'ocr（历史）'}</span>
-            </div>
-            <div className="stat">
-              <span className="stat-label">注入记忆 / MCP</span>
-              <span className="stat-value small">
-                {memoryAudit.data?.count ?? 0} 条记忆 · {mcpAudit.data?.servers.length ?? 0} 个 MCP
+              <span className="stat-label">{t('common.status')}</span>
+              <span className={`stat-value tag ${item.status}`}>
+                {STATUS_KEYS[item.status] ? t(STATUS_KEYS[item.status]) : item.status}
               </span>
             </div>
             <div className="stat">
-              <span className="stat-label">开始 / 结束</span>
+              <span className="stat-label">{t('tasks.col.node')}</span>
+              <span className="stat-value mono">{item.node}</span>
+            </div>
+            <div className="stat">
+              <span className="stat-label">{t('tasks.col.author')}</span>
+              <span className="stat-value">{item.author ?? '—'}</span>
+            </div>
+            <div className="stat">
+              <span className="stat-label">{t('tasks.filter.trigger')}</span>
+              <span className="stat-value">
+                {item.trigger === 'auto' ? t('tasks.trigger.auto') : t('tasks.trigger.manual')}
+              </span>
+            </div>
+            <div className="stat">
+              <span className="stat-label">{t('tasks.detail.reviewModel')}</span>
               <span className="stat-value small">
-                {formatTime(t.startedAt)} → {formatTime(t.finishedAt)}
+                {item.providerLabel ?? t('tasks.defaultModel')}
+              </span>
+            </div>
+            <div className="stat">
+              <span className="stat-label">{t('tasks.detail.reviewEngine')}</span>
+              <span className="stat-value">
+                {report.data?.report.engine ?? t('tasks.detail.legacyEngine')}
+              </span>
+            </div>
+            <div className="stat">
+              <span className="stat-label">{t('tasks.detail.injectedMeta')}</span>
+              <span className="stat-value small">
+                {t('tasks.detail.injectedSummary', {
+                  memories: memoryAudit.data?.count ?? 0,
+                  mcps: mcpAudit.data?.servers.length ?? 0,
+                })}
+              </span>
+            </div>
+            <div className="stat">
+              <span className="stat-label">{t('tasks.detail.timeRange')}</span>
+              <span className="stat-value small">
+                {formatTime(item.startedAt)} → {formatTime(item.finishedAt)}
               </span>
             </div>
           </div>
-          {t.error && (
+          {item.error && (
             <div className="alert error" role="alert">
-              失败原因：{t.error}
+              {t('tasks.detail.failureReason', { error: item.error })}
             </div>
           )}
         </section>
@@ -460,38 +482,40 @@ function TaskDetail({ taskId }: { taskId: number }) {
       {report.data && (
         <section className="card" aria-labelledby="task-report-title">
           <div className="card-head">
-            <h2 id="task-report-title">评审报告</h2>
+            <h2 id="task-report-title">{t('tasks.detail.reportTitle')}</h2>
             <span className="tag">
-              发现问题 {report.data.issues.length} 条
+              {t('tasks.detail.issueCount', { count: report.data.issues.length })}
             </span>
           </div>
-          <div className="report-summary prewrap">{report.data.report.summary ?? '（无摘要）'}</div>
+          <div className="report-summary prewrap">
+            {report.data.report.summary ?? t('tasks.detail.noSummary')}
+          </div>
           {!report.data.report.parsedOk && (
-            <div className="alert info">报告解析失败，已保留原文。</div>
+            <div className="alert info">{t('tasks.detail.parseFailed')}</div>
           )}
           {report.data.issues.length === 0 ? (
-            <p className="muted">未发现评审问题。</p>
+            <p className="muted">{t('tasks.detail.noIssues')}</p>
           ) : (
             <div className="table-wrap">
               <table className="table report-table">
-                <caption className="visually-hidden">评审问题列表</caption>
+                <caption className="visually-hidden">{t('tasks.detail.issueListCaption')}</caption>
                 <thead>
                   <tr>
                     <th scope="col" className="col-file">
-                      文件
+                      {t('tasks.detail.colFile')}
                     </th>
                     <th scope="col" className="col-meta">
-                      行号
+                      {t('tasks.detail.colLine')}
                     </th>
                     <th scope="col" className="col-meta">
-                      级别
+                      {t('tasks.detail.colSeverity')}
                     </th>
                     <th scope="col" className="col-meta">
-                      缺陷类型
+                      {t('tasks.detail.colCategory')}
                     </th>
-                    <th scope="col">问题描述与建议</th>
+                    <th scope="col">{t('tasks.detail.colDescription')}</th>
                     <th scope="col" className="actions-cell">
-                      反馈
+                      {t('tasks.detail.colFeedback')}
                     </th>
                   </tr>
                 </thead>
@@ -520,17 +544,19 @@ function TaskDetail({ taskId }: { taskId: number }) {
                         {issue.description}
                         {issue.suggestion && (
                           <details>
-                            <summary>查看建议代码</summary>
+                            <summary>{t('tasks.detail.viewSuggestion')}</summary>
                             <pre className="raw">{issue.suggestion}</pre>
                           </details>
                         )}
                         {issue.feedback?.verdict === 'wont_fix' && issue.feedback.note && (
-                          <div className="small muted">不修复原因：{issue.feedback.note}</div>
+                          <div className="small muted">
+                            {t('tasks.detail.wontFixReason', { note: issue.feedback.note })}
+                          </div>
                         )}
                       </td>
                       <td className="actions-cell">
                         {issue.feedback ? (
-                          <span className="tag">{FEEDBACK_LABEL[issue.feedback.verdict]}</span>
+                          <span className="tag">{t(FEEDBACK_KEYS[issue.feedback.verdict])}</span>
                         ) : (
                           <div className="row-actions">
                             <button
@@ -539,7 +565,10 @@ function TaskDetail({ taskId }: { taskId: number }) {
                               disabled={busy}
                               onClick={() => askForReason(issue.id, 'false_positive')}
                             >
-                              误报<span className="visually-hidden">问题 #{issue.id}</span>
+                              {t('tasks.detail.markFalsePositive')}
+                              <span className="visually-hidden">
+                                {t('tasks.detail.srIssue', { id: issue.id })}
+                              </span>
                             </button>
                             <button
                               type="button"
@@ -547,7 +576,10 @@ function TaskDetail({ taskId }: { taskId: number }) {
                               disabled={busy}
                               onClick={() => void sendFeedback(issue.id, 'fixed')}
                             >
-                              已修复<span className="visually-hidden">问题 #{issue.id}</span>
+                              {t('tasks.detail.markFixed')}
+                              <span className="visually-hidden">
+                                {t('tasks.detail.srIssue', { id: issue.id })}
+                              </span>
                             </button>
                             <button
                               type="button"
@@ -555,7 +587,10 @@ function TaskDetail({ taskId }: { taskId: number }) {
                               disabled={busy}
                               onClick={() => askForReason(issue.id, 'wont_fix')}
                             >
-                              不修复<span className="visually-hidden">问题 #{issue.id}</span>
+                              {t('tasks.detail.markWontFix')}
+                              <span className="visually-hidden">
+                                {t('tasks.detail.srIssue', { id: issue.id })}
+                              </span>
                             </button>
                           </div>
                         )}
@@ -569,14 +604,18 @@ function TaskDetail({ taskId }: { taskId: number }) {
           {(report.data.suppressedIssues?.length ?? 0) > 0 && (
             <details>
               <summary>
-                已被项目记忆确定性抑制的问题（{report.data.suppressedIssues!.length} 条，默认不展示）
+                {t('tasks.detail.suppressedSummary', {
+                  count: report.data.suppressedIssues!.length,
+                })}
               </summary>
               <ul className="audit-list">
                 {report.data.suppressedIssues!.map((i) => (
                   <li key={i.id} className="small">
                     <span className="mono">{i.file ?? '—'}</span>
                     {i.line ? `:${i.line}` : ''} {i.description.slice(0, 160)}
-                    <span className="muted">（命中记忆 #{i.suppressedBy}）</span>
+                    <span className="muted">
+                      {t('tasks.detail.suppressedBy', { id: i.suppressedBy ?? '' })}
+                    </span>
                   </li>
                 ))}
               </ul>
@@ -584,15 +623,15 @@ function TaskDetail({ taskId }: { taskId: number }) {
           )}
           {report.data.raw && (
             <details>
-              <summary>查看原始 JSON</summary>
+              <summary>{t('tasks.detail.viewRawJson')}</summary>
               <pre className="raw">{report.data.raw}</pre>
             </details>
           )}
         </section>
       )}
 
-      {t && !report.data && t.status === 'succeeded' && (
-        <p className="muted">报告索引尚未生成，请稍后刷新。</p>
+      {item && !report.data && item.status === 'succeeded' && (
+        <p className="muted">{t('tasks.detail.reportPending')}</p>
       )}
 
       {((mcpAudit.data && mcpAudit.data.servers.length > 0) ||
@@ -600,22 +639,28 @@ function TaskDetail({ taskId }: { taskId: number }) {
         <div className="audit-grid">
           {mcpAudit.data && mcpAudit.data.servers.length > 0 && (
             <section className="card" aria-labelledby="task-mcp-title">
-              <h2 id="task-mcp-title">MCP 注入审计</h2>
+              <h2 id="task-mcp-title">{t('tasks.detail.mcpAuditTitle')}</h2>
               <ul className="audit-list">
                 {mcpAudit.data.servers.map((s) => (
                   <li key={s.serverId} className="small">
                     <span className="mono">{s.serverName}</span>
-                    {s.allowlistEnforced ? '' : '（白名单未强制执行——引擎不支持按工具过滤）'}
+                    {s.allowlistEnforced ? '' : t('tasks.detail.allowlistNotEnforced')}
                     {s.toolStats ? (
                       <span>
                         {' '}
-                        调用统计：
+                        {t('tasks.detail.toolStatsLabel')}
                         {Object.entries(s.toolStats)
-                          .map(([tool, v]) => `${tool} ${v.calls}次/失败${v.failures}`)
-                          .join('，')}
+                          .map(([tool, v]) =>
+                            t('tasks.detail.toolStatItem', {
+                              tool,
+                              calls: v.calls,
+                              failures: v.failures,
+                            })
+                          )
+                          .join(', ')}
                       </span>
                     ) : (
-                      <span className="muted">（引擎未上报工具统计）</span>
+                      <span className="muted">{t('tasks.detail.statsNotReported')}</span>
                     )}
                   </li>
                 ))}
@@ -625,12 +670,14 @@ function TaskDetail({ taskId }: { taskId: number }) {
 
           {memoryAudit.data && memoryAudit.data.count > 0 && (
             <section className="card" aria-labelledby="task-memory-title">
-              <h2 id="task-memory-title">注入的项目记忆（{memoryAudit.data.count} 条）</h2>
+              <h2 id="task-memory-title">
+                {t('tasks.detail.memoryAuditTitle', { count: memoryAudit.data.count })}
+              </h2>
               <ul className="audit-list">
                 {memoryAudit.data.entries.map((m) => (
                   <li key={m.id} className="small">
                     <span className="tag">{m.kind}</span> {m.title}
-                    {m.scope ? <span className="muted">（{m.scope}）</span> : null}
+                    {m.scope ? <span className="muted"> ({m.scope})</span> : null}
                   </li>
                 ))}
               </ul>
@@ -657,9 +704,11 @@ function TaskDetail({ taskId }: { taskId: number }) {
               void sendFeedback(pendingFeedback.issueId, pendingFeedback.verdict, note || undefined);
             }}
           >
-            <h2 id={feedbackTitleId}>{wontFix ? '标记不修复' : '标记误报'}</h2>
+            <h2 id={feedbackTitleId}>
+              {wontFix ? t('tasks.detail.dialogWontFixTitle') : t('tasks.detail.dialogFpTitle')}
+            </h2>
             <label>
-              {wontFix ? '不修复原因（必填，将写入项目记忆）' : '误报原因（可选）'}
+              {wontFix ? t('tasks.detail.dialogWontFixLabel') : t('tasks.detail.dialogFpLabel')}
               <textarea
                 rows={4}
                 value={reason}
@@ -670,13 +719,21 @@ function TaskDetail({ taskId }: { taskId: number }) {
                 autoFocus
               />
             </label>
-            {feedbackError && <div className="alert error" role="alert">{feedbackError}</div>}
+            {feedbackError && (
+              <div className="alert error" role="alert">
+                {feedbackError}
+              </div>
+            )}
             <div className="actions">
               <button type="button" onClick={closeFeedback} disabled={busy}>
-                取消
+                {t('common.cancel')}
               </button>
-              <button type="submit" className="primary" disabled={busy || (wontFix && !reason.trim())}>
-                {busy ? '保存中…' : '保存'}
+              <button
+                type="submit"
+                className="primary"
+                disabled={busy || (wontFix && !reason.trim())}
+              >
+                {busy ? t('common.saving') : t('common.save')}
               </button>
             </div>
           </form>
@@ -684,10 +741,4 @@ function TaskDetail({ taskId }: { taskId: number }) {
       </dialog>
     </div>
   );
-}
-
-function formatTime(value: string | null | undefined): string {
-  if (!value) return '—';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }

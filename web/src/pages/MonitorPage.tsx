@@ -2,6 +2,7 @@ import { useEffect, useId, useState } from 'react';
 import { api, type MonitorRule, type Repo } from '../api/client';
 import { errorText, useApi, usePageTitle } from '../api/hooks';
 import { useFlash } from '../components/Toast';
+import { useI18n, type MessageKey } from '../i18n';
 
 interface RuleForm {
   intervalSeconds: number;
@@ -17,15 +18,15 @@ const defaults: RuleForm = {
   backtrackNodes: 0,
 };
 
-/** monitor_state.init_status values → Chinese labels. */
-const INIT_LABEL: Record<string, string> = {
-  ready: '就绪',
-  cloning: '初始化中（克隆中）',
-  failed: '初始化失败',
+const INIT_LABEL_KEYS: Record<string, MessageKey> = {
+  ready: 'monitor.status.initReady',
+  cloning: 'monitor.status.initCloning',
+  failed: 'monitor.status.initFailed',
 };
 
 export function MonitorPage() {
-  usePageTitle('监控规则');
+  const { t, formatTime } = useI18n();
+  usePageTitle(t('monitor.pageTitle'));
   const repos = useApi(() => api.get<Repo[]>('/api/repos'));
   const rules = useApi(() => api.get<MonitorRule[]>('/api/monitor/rules'));
   const flash = useFlash();
@@ -75,11 +76,11 @@ export function MonitorPage() {
     if (selectedRepo === null) return;
     setFormError(null);
     if (!Number.isInteger(form.intervalSeconds) || form.intervalSeconds < 30) {
-      setFormError('轮询间隔必须是不小于 30 的整数（秒）');
+      setFormError(t('monitor.error.interval'));
       return;
     }
     if (!Number.isInteger(form.backtrackNodes) || form.backtrackNodes < 0) {
-      setFormError('回溯节点数必须是非负整数');
+      setFormError(t('monitor.error.backtrack'));
       return;
     }
     setBusy(true);
@@ -90,7 +91,7 @@ export function MonitorPage() {
         pathPrefixes: parseLines(form.pathPrefixes),
         backtrackNodes: form.backtrackNodes,
       });
-      flash.ok('监控规则已保存');
+      flash.ok(t('monitor.toast.saved'));
       await rules.reload();
     } catch (err) {
       flash.fail(errorText(err));
@@ -120,27 +121,25 @@ export function MonitorPage() {
     <div>
       <div className="page-head">
         <div className="page-title-group">
-          <h1>监控规则</h1>
-          <p className="page-subtitle">配置仓库定时轮询策略、作者白名单与路径前缀自动触发代码评审</p>
+          <h1>{t('monitor.pageTitle')}</h1>
+          <p className="page-subtitle">{t('monitor.subtitle')}</p>
         </div>
         <button type="button" className="secondary" onClick={() => void rules.reload()}>
-          刷新状态
+          {t('monitor.refreshStatus')}
         </button>
       </div>
 
       {repos.data && repos.data.length === 0 && (
-        <div className="alert info">还没有仓库，请先在「仓库管理」中添加。</div>
+        <div className="alert info">{t('monitor.noRepos')}</div>
       )}
 
       {repos.data && repos.data.length > 0 && (
         <div className="split">
           <section className="card" aria-labelledby="rule-form-title">
-            <h2 id="rule-form-title">规则配置</h2>
-            {/* noValidate: the handler below shows a Chinese range message
-                instead of the browser's native tooltip. */}
+            <h2 id="rule-form-title">{t('monitor.form.title')}</h2>
             <form className="form" onSubmit={save} noValidate aria-describedby={ids.hint}>
               <label htmlFor={ids.repo}>
-                仓库
+                {t('monitor.form.repo')}
                 <select
                   id={ids.repo}
                   value={selectedRepo ?? ''}
@@ -148,14 +147,14 @@ export function MonitorPage() {
                 >
                   {repos.data.map((r) => (
                     <option key={r.id} value={r.id}>
-                      {r.name}（{r.type.toUpperCase()}）
+                      {r.name} ({r.type.toUpperCase()})
                     </option>
                   ))}
                 </select>
               </label>
               <div className="two-col">
                 <label htmlFor={ids.interval}>
-                  轮询间隔（秒，≥30）
+                  {t('monitor.form.interval')}
                   <input
                     id={ids.interval}
                     type="number"
@@ -167,7 +166,7 @@ export function MonitorPage() {
                   />
                 </label>
                 <label htmlFor={ids.backtrack}>
-                  首次回溯节点数
+                  {t('monitor.form.backtrack')}
                   <input
                     id={ids.backtrack}
                     type="number"
@@ -177,21 +176,19 @@ export function MonitorPage() {
                   />
                 </label>
               </div>
-              <p className="muted small form-hint">
-                首次启用监控时向前回溯历史提交数，设为 0 表示仅从当前最新节点开始。
-              </p>
+              <p className="muted small form-hint">{t('monitor.form.backtrackHint')}</p>
               <label htmlFor={ids.authors}>
-                上库人员白名单（每行一个，留空不过滤）
+                {t('monitor.form.authors')}
                 <textarea
                   id={ids.authors}
                   rows={3}
                   value={form.authorWhitelist}
                   onChange={(e) => setForm({ ...form, authorWhitelist: e.target.value })}
-                  placeholder={'zhangsan\nlisi'}
+                  placeholder={'alice\nbob'}
                 />
               </label>
               <label htmlFor={ids.paths}>
-                路径前缀（每行一个，留空不过滤）
+                {t('monitor.form.paths')}
                 <textarea
                   id={ids.paths}
                   rows={3}
@@ -201,7 +198,9 @@ export function MonitorPage() {
                 />
               </label>
               {repo?.type === 'git' && (
-                <p className="muted small">监控分支：{repo.branch ?? 'main'}（在「仓库管理」中修改）</p>
+                <p className="muted small">
+                  {t('monitor.form.gitBranchNote', { branch: repo.branch ?? 'main' })}
+                </p>
               )}
               {formError && (
                 <div className="alert error" role="alert">
@@ -210,7 +209,7 @@ export function MonitorPage() {
               )}
               <div className="actions">
                 <button className="primary" type="submit" disabled={busy}>
-                  保存规则
+                  {t('monitor.form.save')}
                 </button>
                 {currentRule && (
                   <button
@@ -219,11 +218,11 @@ export function MonitorPage() {
                     disabled={busy}
                     onClick={() =>
                       currentRule.enabled
-                        ? action('disable', '监控已停用')
-                        : action('enable', '监控已启用')
+                        ? action('disable', t('monitor.toast.disabled'))
+                        : action('enable', t('monitor.toast.enabled'))
                     }
                   >
-                    {currentRule.enabled ? '停用监控' : '启用监控'}
+                    {currentRule.enabled ? t('monitor.form.disable') : t('monitor.form.enable')}
                   </button>
                 )}
                 {currentRule && (
@@ -231,79 +230,83 @@ export function MonitorPage() {
                     type="button"
                     className="secondary"
                     disabled={busy}
-                    onClick={() => action('poll', '已执行一次轮询')}
+                    onClick={() => action('poll', t('monitor.toast.polled'))}
                   >
-                    立即轮询
+                    {t('monitor.form.pollNow')}
                   </button>
                 )}
               </div>
               <p className="muted small" id={ids.hint}>
-                人员白名单与路径前缀同时配置时需同时命中（AND）。未命中的节点会记录跳过原因。
+                {t('monitor.form.hint')}
               </p>
             </form>
           </section>
 
           <section className="card grow" aria-labelledby="monitor-status-title">
-            <h2 id="monitor-status-title">监控状态</h2>
-            {!currentRule && <p className="muted">该仓库尚未配置监控规则。</p>}
+            <h2 id="monitor-status-title">{t('monitor.status.title')}</h2>
+            {!currentRule && <p className="muted">{t('monitor.status.unconfigured')}</p>}
             {currentRule && status && (
               <>
                 <div className="stat-grid cols-3">
                   <div className="stat">
-                    <span className="stat-label">状态</span>
+                    <span className="stat-label">{t('common.status')}</span>
                     <span className={currentRule.enabled ? 'stat-value ok' : 'stat-value off'}>
-                      {currentRule.enabled ? '监控中' : '已停用'}
+                      {currentRule.enabled
+                        ? t('monitor.status.running')
+                        : t('monitor.status.stopped')}
                     </span>
                   </div>
                   <div className="stat">
-                    <span className="stat-label">间隔</span>
+                    <span className="stat-label">{t('monitor.status.interval')}</span>
                     <span className="stat-value">{currentRule.intervalSeconds}s</span>
                   </div>
                   <div className="stat">
-                    <span className="stat-label">最新节点</span>
+                    <span className="stat-label">{t('monitor.status.headNode')}</span>
                     <span className="stat-value mono">{status.headNode ?? '—'}</span>
                   </div>
                   <div className="stat">
-                    <span className="stat-label">已处理位置</span>
+                    <span className="stat-label">{t('monitor.status.lastNode')}</span>
                     <span className="stat-value mono">{status.lastNode ?? '—'}</span>
                   </div>
                   <div className="stat">
-                    <span className="stat-label">最近轮询</span>
+                    <span className="stat-label">{t('monitor.status.lastPoll')}</span>
                     <span className="stat-value">{formatTime(status.lastPollAt)}</span>
                   </div>
                   <div className="stat">
-                    <span className="stat-label">初始化</span>
-                    <span className="stat-value">{INIT_LABEL[status.initStatus] ?? status.initStatus}</span>
+                    <span className="stat-label">{t('monitor.status.init')}</span>
+                    <span className="stat-value">
+                      {INIT_LABEL_KEYS[status.initStatus]
+                        ? t(INIT_LABEL_KEYS[status.initStatus])
+                        : status.initStatus}
+                    </span>
                   </div>
                 </div>
                 {status.initStatus === 'cloning' && (
-                  <div className="alert info">
-                    Git 仓库正在后台克隆，克隆完成后开始轮询；期间该仓库标记为“初始化中”。
-                  </div>
+                  <div className="alert info">{t('monitor.status.cloningAlert')}</div>
                 )}
                 {status.initStatus === 'failed' && (
                   <div className="alert error" role="alert">
-                    初始化失败：无法确定监控起点，请检查仓库地址与凭据后重新启用监控。
+                    {t('monitor.status.failedAlert')}
                   </div>
                 )}
                 {status.lastPollError && (
                   <div className="alert error" role="alert">
-                    最近轮询失败：{status.lastPollError}
+                    {t('monitor.status.lastPollError', { error: status.lastPollError })}
                   </div>
                 )}
-                <h3>最近触发 / 跳过记录</h3>
-                {status.recentLog.length === 0 && <p className="muted">暂无记录。</p>}
+                <h3>{t('monitor.log.title')}</h3>
+                {status.recentLog.length === 0 && <p className="muted">{t('monitor.log.empty')}</p>}
                 {status.recentLog.length > 0 && (
                   <div className="table-wrap">
                     <table className="table compact">
-                      <caption className="visually-hidden">最近的监控触发与跳过记录</caption>
+                      <caption className="visually-hidden">{t('monitor.log.caption')}</caption>
                       <thead>
                         <tr>
-                          <th scope="col">节点</th>
-                          <th scope="col">动作</th>
-                          <th scope="col">作者</th>
-                          <th scope="col">原因</th>
-                          <th scope="col">时间</th>
+                          <th scope="col">{t('monitor.log.colNode')}</th>
+                          <th scope="col">{t('monitor.log.colAction')}</th>
+                          <th scope="col">{t('monitor.log.colAuthor')}</th>
+                          <th scope="col">{t('monitor.log.colReason')}</th>
+                          <th scope="col">{t('monitor.log.colTime')}</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -312,7 +315,9 @@ export function MonitorPage() {
                             <td className="mono">{log.node}</td>
                             <td>
                               <span className={log.action === 'triggered' ? 'tag ok' : 'tag off'}>
-                                {log.action === 'triggered' ? '触发' : '跳过'}
+                                {log.action === 'triggered'
+                                  ? t('monitor.log.triggered')
+                                  : t('monitor.log.skipped')}
                               </span>
                             </td>
                             <td>{log.author ?? '—'}</td>
@@ -331,10 +336,4 @@ export function MonitorPage() {
       )}
     </div>
   );
-}
-
-function formatTime(value: string | null | undefined): string {
-  if (!value) return '—';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }

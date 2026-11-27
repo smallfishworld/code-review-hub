@@ -5,17 +5,19 @@ import { errorText, useApi, usePageTitle } from '../api/hooks';
 import { useConfirm } from '../components/ConfirmDialog';
 import { NodePicker } from '../components/NodePicker';
 import { useFlash } from '../components/Toast';
+import { useI18n, type MessageKey } from '../i18n';
 
-const STATUS_LABEL: Record<string, string> = {
-  queued: '排队中',
-  running: '执行中',
-  succeeded: '成功',
-  failed: '失败',
-  cancelled: '已取消',
+const STATUS_KEYS: Record<string, MessageKey> = {
+  queued: 'tasks.status.queued',
+  running: 'tasks.status.running',
+  succeeded: 'tasks.status.succeeded',
+  failed: 'tasks.status.failed',
+  cancelled: 'tasks.status.cancelled',
 };
 
 export function TriggerPage() {
-  usePageTitle('手动触发');
+  const { t, formatTime } = useI18n();
+  usePageTitle(t('trigger.pageTitle'));
   const repos = useApi(() => api.get<Repo[]>('/api/repos'));
   const recentTasks = useApi(() => api.get<TaskList>('/api/tasks?trigger=manual&limit=10'));
   const flash = useFlash();
@@ -54,15 +56,15 @@ export function TriggerPage() {
             node: node.trim(),
           });
           setResult([res.task]);
-          flash.ok(`已创建评审任务 #${res.task.id}`);
+          flash.ok(t('trigger.toast.created', { id: res.task.id }));
           void recentTasks.reload();
         } catch (err) {
           const e2 = err as { status?: number; body?: { duplicate?: boolean } };
           if (e2.status === 409 && e2.body?.duplicate) {
             const ok = await confirm({
-              title: '该节点已评审过',
-              body: `节点 ${node.trim()} 已有评审记录，是否重新评审？`,
-              confirmLabel: '重新评审',
+              title: t('trigger.confirm.duplicateTitle'),
+              body: t('trigger.confirm.duplicateBody', { node: node.trim() }),
+              confirmLabel: t('trigger.confirm.duplicateButton'),
             });
             if (!ok) return;
             const res = await api.post<{ task: Task }>(`/api/repos/${repoId}/review`, {
@@ -70,7 +72,7 @@ export function TriggerPage() {
               force: true,
             });
             setResult([res.task]);
-            flash.ok(`已创建重新评审任务 #${res.task.id}`);
+            flash.ok(t('trigger.toast.recreated', { id: res.task.id }));
             void recentTasks.reload();
           } else {
             throw err;
@@ -84,18 +86,21 @@ export function TriggerPage() {
         setResult(res.tasks);
         setWarning(res.warning ?? null);
         if (res.tasks.length === 0) {
-          // Every node in the range already has a review: an "已创建 0 个"
-          // success toast would look like a broken button.
           flash.fail(
             res.duplicates > 0
-              ? `区间内 ${res.duplicates} 个节点均已评审过，未创建新任务`
-              : '区间内没有可评审的节点'
+              ? t('trigger.toast.allDuplicates', { count: res.duplicates })
+              : t('trigger.toast.noNodes')
           );
         } else if (res.duplicates > 0) {
-          flash.ok(`已创建 ${res.tasks.length} 个评审任务，跳过 ${res.duplicates} 个已评审节点`);
+          flash.ok(
+            t('trigger.toast.createdRangeWithDup', {
+              created: res.tasks.length,
+              duplicates: res.duplicates,
+            })
+          );
           void recentTasks.reload();
         } else {
-          flash.ok(`已创建 ${res.tasks.length} 个评审任务`);
+          flash.ok(t('trigger.toast.createdRange', { created: res.tasks.length }));
           void recentTasks.reload();
         }
       }
@@ -106,43 +111,44 @@ export function TriggerPage() {
     }
   };
 
-  const placeholder = repo?.type === 'git' ? 'commit 哈希（可短哈希）' : 'revision 号';
+  const placeholder =
+    repo?.type === 'git' ? t('trigger.form.gitPlaceholder') : t('trigger.form.svnPlaceholder');
 
   return (
     <div>
       <div className="page-head">
         <div className="page-title-group">
-          <h1>手动触发评审</h1>
-          <p className="page-subtitle">指定单个提交或版本区间立即发起 AI 代码审查</p>
+          <h1>{t('trigger.heading')}</h1>
+          <p className="page-subtitle">{t('trigger.subtitle')}</p>
         </div>
         <Link to="/tasks" className="btn-link secondary">
-          全部任务列表
+          {t('trigger.allTasks')}
         </Link>
       </div>
 
       <div className="split">
         <section className="card" aria-labelledby="trigger-form-title">
-          <h2 id="trigger-form-title">发起评审</h2>
+          <h2 id="trigger-form-title">{t('trigger.form.title')}</h2>
           <form className="form" onSubmit={submit} aria-describedby={ids.hint}>
             <label htmlFor={ids.repo}>
-              仓库
+              {t('trigger.form.repo')}
               <select
                 id={ids.repo}
                 value={repoId}
                 onChange={(e) => setRepoId(e.target.value === '' ? '' : Number(e.target.value))}
                 required
               >
-                <option value="">请选择仓库</option>
+                <option value="">{t('trigger.form.selectRepo')}</option>
                 {repos.data?.map((r) => (
                   <option key={r.id} value={r.id}>
-                    {r.name}（{r.type.toUpperCase()}）
+                    {r.name} ({r.type.toUpperCase()})
                   </option>
                 ))}
               </select>
             </label>
 
             <fieldset className="radio-row">
-              <legend className="visually-hidden">评审范围</legend>
+              <legend className="visually-hidden">{t('trigger.form.scopeLegend')}</legend>
               <label className="radio" htmlFor={ids.single}>
                 <input
                   id={ids.single}
@@ -151,7 +157,7 @@ export function TriggerPage() {
                   checked={mode === 'single'}
                   onChange={() => setMode('single')}
                 />
-                单节点
+                {t('trigger.form.single')}
               </label>
               <label className="radio" htmlFor={ids.range}>
                 <input
@@ -161,16 +167,16 @@ export function TriggerPage() {
                   checked={mode === 'range'}
                   onChange={() => setMode('range')}
                 />
-                区间
+                {t('trigger.form.range')}
               </label>
             </fieldset>
 
             {mode === 'single' ? (
               <label htmlFor={ids.node}>
-                节点
+                {t('trigger.form.node')}
                 <NodePicker
                   inputId={ids.node}
-                  label="节点"
+                  label={t('trigger.form.node')}
                   repoId={repoId}
                   value={node}
                   onChange={setNode}
@@ -181,10 +187,10 @@ export function TriggerPage() {
             ) : (
               <div className="two-col">
                 <label htmlFor={ids.from}>
-                  起始节点
+                  {t('trigger.form.from')}
                   <NodePicker
                     inputId={ids.from}
-                    label="起始节点"
+                    label={t('trigger.form.from')}
                     repoId={repoId}
                     value={from}
                     onChange={setFrom}
@@ -193,10 +199,10 @@ export function TriggerPage() {
                   />
                 </label>
                 <label htmlFor={ids.to}>
-                  结束节点
+                  {t('trigger.form.to')}
                   <NodePicker
                     inputId={ids.to}
-                    label="结束节点"
+                    label={t('trigger.form.to')}
                     repoId={repoId}
                     value={to}
                     onChange={setTo}
@@ -209,11 +215,11 @@ export function TriggerPage() {
 
             <div className="actions">
               <button className="primary" type="submit" disabled={busy || repoId === ''}>
-                {busy ? '提交中…' : '开始评审'}
+                {busy ? t('trigger.form.submitting') : t('trigger.form.submit')}
               </button>
             </div>
             <p className="muted small" id={ids.hint}>
-              区间模式会为区间内每个节点创建独立任务（按时间顺序），大区间会提示确认。
+              {t('trigger.form.hint')}
             </p>
           </form>
         </section>
@@ -227,17 +233,17 @@ export function TriggerPage() {
 
           {result && result.length > 0 && (
             <section className="card" aria-labelledby="created-tasks-title">
-              <h2 id="created-tasks-title">已创建任务</h2>
+              <h2 id="created-tasks-title">{t('trigger.created.title')}</h2>
               <div className="table-wrap">
                 <table className="table">
-                  <caption className="visually-hidden">本次触发创建的任务</caption>
+                  <caption className="visually-hidden">{t('trigger.created.caption')}</caption>
                   <thead>
                     <tr>
-                      <th scope="col">任务</th>
-                      <th scope="col">节点</th>
-                      <th scope="col">状态</th>
+                      <th scope="col">{t('trigger.col.task')}</th>
+                      <th scope="col">{t('trigger.col.node')}</th>
+                      <th scope="col">{t('common.status')}</th>
                       <th scope="col" className="actions-cell">
-                        操作
+                        {t('common.actions')}
                       </th>
                     </tr>
                   </thead>
@@ -250,7 +256,7 @@ export function TriggerPage() {
                         <td className="mono">{task.node}</td>
                         <td>
                           <span className={`tag ${task.status}`}>
-                            {STATUS_LABEL[task.status] ?? task.status}
+                            {STATUS_KEYS[task.status] ? t(STATUS_KEYS[task.status]) : task.status}
                           </span>
                         </td>
                         <td className="actions-cell">
@@ -259,7 +265,10 @@ export function TriggerPage() {
                             className="link"
                             onClick={() => navigate(`/tasks/${task.id}`)}
                           >
-                            查看进度<span className="visually-hidden">任务 #{task.id}</span>
+                            {t('trigger.viewProgress')}
+                            <span className="visually-hidden">
+                              {t('trigger.srTask', { id: task.id })}
+                            </span>
                           </button>
                         </td>
                       </tr>
@@ -272,32 +281,34 @@ export function TriggerPage() {
 
           <section className="card" aria-labelledby="recent-manual-title">
             <div className="card-head">
-              <h2 id="recent-manual-title">最近手动触发记录</h2>
+              <h2 id="recent-manual-title">{t('trigger.recent.title')}</h2>
               <button
                 type="button"
                 className="secondary small"
                 onClick={() => void recentTasks.reload()}
               >
-                刷新
+                {t('common.refresh')}
               </button>
             </div>
-            {recentTasks.loading && !recentTasks.data && <p className="muted">加载中…</p>}
+            {recentTasks.loading && !recentTasks.data && (
+              <p className="muted">{t('common.loading')}</p>
+            )}
             {recentTasks.data && recentTasks.data.items.length === 0 && (
-              <p className="muted">暂无手动触发记录。在左侧选择仓库与提交节点即可发起评审。</p>
+              <p className="muted">{t('trigger.recent.empty')}</p>
             )}
             {recentTasks.data && recentTasks.data.items.length > 0 && (
               <div className="table-wrap">
                 <table className="table">
-                  <caption className="visually-hidden">最近手动触发的评审任务</caption>
+                  <caption className="visually-hidden">{t('trigger.recent.caption')}</caption>
                   <thead>
                     <tr>
-                      <th scope="col">任务</th>
-                      <th scope="col">仓库</th>
-                      <th scope="col">节点</th>
-                      <th scope="col">状态</th>
-                      <th scope="col">触发时间</th>
+                      <th scope="col">{t('trigger.col.task')}</th>
+                      <th scope="col">{t('trigger.col.repo')}</th>
+                      <th scope="col">{t('trigger.col.node')}</th>
+                      <th scope="col">{t('common.status')}</th>
+                      <th scope="col">{t('trigger.col.time')}</th>
                       <th scope="col" className="actions-cell">
-                        操作
+                        {t('common.actions')}
                       </th>
                     </tr>
                   </thead>
@@ -307,19 +318,24 @@ export function TriggerPage() {
                         <td>
                           <Link to={`/tasks/${task.id}`}>#{task.id}</Link>
                         </td>
-                        <td>{repos.data?.find((r) => r.id === task.repoId)?.name ?? `#${task.repoId}`}</td>
+                        <td>
+                          {repos.data?.find((r) => r.id === task.repoId)?.name ?? `#${task.repoId}`}
+                        </td>
                         <td className="mono" title={task.node}>
                           {shortHash(task.node)}
                         </td>
                         <td>
                           <span className={`tag ${task.status}`}>
-                            {STATUS_LABEL[task.status] ?? task.status}
+                            {STATUS_KEYS[task.status] ? t(STATUS_KEYS[task.status]) : task.status}
                           </span>
                         </td>
                         <td className="small muted">{formatTime(task.createdAt)}</td>
                         <td className="actions-cell">
                           <Link to={`/tasks/${task.id}`}>
-                            查看进度<span className="visually-hidden">任务 #{task.id}</span>
+                            {t('trigger.viewProgress')}
+                            <span className="visually-hidden">
+                              {t('trigger.srTask', { id: task.id })}
+                            </span>
                           </Link>
                         </td>
                       </tr>
@@ -337,10 +353,4 @@ export function TriggerPage() {
 
 function shortHash(node: string): string {
   return /^[0-9a-f]{40}$/i.test(node) ? node.slice(0, 10) : node;
-}
-
-function formatTime(value: string | null | undefined): string {
-  if (!value) return '—';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }

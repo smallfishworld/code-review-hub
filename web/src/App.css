@@ -148,8 +148,59 @@
     background: var(--accent);
   }
 
-  .sidebar-footer {
+  .sidebar-bottom {
     margin-block-start: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .sidebar-lang {
+    padding: 0 8px;
+  }
+
+  .lang-switch {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-subtle);
+    border: 1px solid var(--border);
+    gap: 2px;
+  }
+
+  .lang-btn {
+    appearance: none;
+    border: none;
+    background: transparent;
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1;
+    padding: 5px 10px;
+    border-radius: calc(var(--radius-sm) - 2px);
+    cursor: pointer;
+    transition: background-color 120ms ease, color 120ms ease;
+  }
+
+  .lang-btn:hover:not(.active) {
+    color: var(--text-h);
+  }
+
+  .lang-btn.active {
+    background: var(--surface);
+    color: var(--accent);
+    font-weight: 600;
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
+  }
+
+  .login-lang {
+    position: fixed;
+    inset-block-start: 18px;
+    inset-inline-end: 20px;
+  }
+
+  .sidebar-footer {
     display: flex;
     align-items: center;
     justify-content: space-between;

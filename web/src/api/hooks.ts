@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { ApiError } from '../api/client';
+import { useI18n } from '../i18n';
 
 /** Fetch data with loading/error state and a manual reload. */
 export function useApi<T>(
@@ -45,7 +46,8 @@ export function errorText(err: unknown): string {
 
 /** Keep the document title in sync with the current view (SPA route change). */
 export function usePageTitle(title: string): void {
+  const { t } = useI18n();
   useEffect(() => {
-    document.title = `${title} · 代码评审平台`;
-  }, [title]);
+    document.title = `${title} · ${t('app.name')}`;
+  }, [title, t]);
 }
