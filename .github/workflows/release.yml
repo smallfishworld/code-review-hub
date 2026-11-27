@@ -25,13 +25,13 @@ permissions:
   contents: write
 
 env:
-  NODE_VERSION: "22"
+  NODE_VERSION: "22.23.5"
   OCR_PACKAGE: "@smallfishworld/open-code-review-svn@1.13.8-svn.1"
 
 jobs:
   prepare:
     name: Prepare Release Metadata
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
       version: ${{ steps.meta.outputs.version }}
@@ -63,7 +63,7 @@ jobs:
 
   verify:
     name: Verify Lint, Tests & Build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -80,10 +80,11 @@ jobs:
       - name: Install Subversion for SVN tests
         run: sudo apt-get update && sudo apt-get install -y subversion
 
-      - name: Install dependencies
-        run: |
-          npm ci --include=optional
-          npm --prefix web ci
+      - name: Install server dependencies
+        run: npm ci --include=optional
+
+      - name: Install web dependencies
+        run: npm --prefix web ci
 
       - name: Lint
         run: npm run lint
@@ -103,12 +104,12 @@ jobs:
       matrix:
         include:
           - target: win-x64
-            os: windows-latest
+            os: windows-2022
             script: scripts/package-win.mjs
             extra_args: ""
             artifact_glob: "release-out/*.zip"
           - target: macos-arm64
-            os: macos-14
+            os: macos-15
             script: scripts/package-mac.mjs
             extra_args: "--arch arm64"
             artifact_glob: "release-out/*.tar.gz"
@@ -118,7 +119,7 @@ jobs:
             extra_args: "--arch x64"
             artifact_glob: "release-out/*.tar.gz"
           - target: linux-x64
-            os: ubuntu-latest
+            os: ubuntu-26.04
             script: scripts/package-linux.mjs
             extra_args: "--arch x64"
             artifact_glob: "release-out/*.tar.gz"
@@ -141,10 +142,28 @@ jobs:
             package-lock.json
             web/package-lock.json
 
-      - name: Install dependencies
+      # Keep node-gyp on the VS 2022 / Python 3.12 toolchain.
+      - name: Setup Python for native modules (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12.10"
+
+      - name: Configure node-gyp (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
         run: |
-          npm ci --include=optional
-          npm --prefix web ci
+          "NODE_GYP_FORCE_PYTHON=$((Get-Command python).Source)" >> $env:GITHUB_ENV
+          "npm_config_msvs_version=2022" >> $env:GITHUB_ENV
+
+      - name: Install server dependencies
+        run: npm ci --include=optional
+
+      - name: Install web dependencies
+        run: npm --prefix web ci
+
+      - name: Verify SQLite native binding
+        run: node -e "const Database = require('better-sqlite3'); const db = new Database(':memory:'); db.close()"
 
       - name: Install ocr CLI globally
         run: npm install -g ${{ env.OCR_PACKAGE }}
@@ -165,7 +184,7 @@ jobs:
   release:
     name: Publish GitHub Release
     needs: [prepare, package]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - name: Checkout repository (full history for release notes)
         uses: actions/checkout@v4
