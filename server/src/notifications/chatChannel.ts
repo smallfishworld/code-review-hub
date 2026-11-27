@@ -1,5 +1,5 @@
 import type { ChannelService } from './channelService.js';
-import { statusLabel } from './render.js';
+import { statusLabel, formatCommitDate } from './render.js';
 import type { NotificationContext } from './types.js';
 
 /**
@@ -19,8 +19,11 @@ import type { NotificationContext } from './types.js';
 
 export const PLACEHOLDERS = [
   'repo',
+  'repo_url',
   'node',
   'author',
+  'commit_message',
+  'commit_date',
   'status',
   'summary',
   'report_url',
@@ -71,8 +74,11 @@ export function buildChatPayload(
 export function sampleContext(): NotificationContext {
   return {
     repo: 'demo-repo',
+    repo_url: 'svn://demo/srv/main',
     node: '1234',
     author: 'test-user',
+    commit_message: '示例提交：修复登录超时问题',
+    commit_date: formatCommitDate(new Date().toISOString()),
     status: statusLabel('succeeded'),
     summary: '这是一条测试通知，收到即表示渠道配置正确。',
     report_url: 'http://localhost:3000/tasks/0',

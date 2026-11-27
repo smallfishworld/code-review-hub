@@ -26,6 +26,10 @@ export interface TaskRecord {
   /** Snapshot of the provider's "name · model" at enqueue time. */
   providerLabel?: string;
   author?: string;
+  /** Commit log message, snapshotted at enqueue time. */
+  commitMessage?: string;
+  /** Commit date (ISO), snapshotted at enqueue time. */
+  commitDate?: string;
   error?: string;
   ocrExitCode?: number;
   startedAt?: string;
@@ -44,6 +48,8 @@ export interface TaskExecutionResult {
 interface EnqueueContext {
   sourceVersion?: number;
   monitorRuleId?: number;
+  /** Commit metadata snapshot (log message + author date) from the VCS log. */
+  commit?: { message?: string; date?: string };
 }
 
 /** Task reached a terminal state. Payload carries the final record. */
@@ -66,6 +72,8 @@ function rowToTask(row: Record<string, unknown>): TaskRecord {
     providerId: (row.provider_id as number | null) ?? undefined,
     providerLabel: (row.provider_label as string | null) ?? undefined,
     author: (row.author as string | null) ?? undefined,
+    commitMessage: (row.commit_message as string | null) ?? undefined,
+    commitDate: (row.commit_date as string | null) ?? undefined,
     error: (row.error as string | null) ?? undefined,
     ocrExitCode: (row.ocr_exit_code as number | null) ?? undefined,
     startedAt: (row.started_at as string | null) ?? undefined,
@@ -158,6 +166,8 @@ export class TaskQueue extends EventEmitter {
       .get(repoId, sourceVersion, node, trigger) as Record<string, unknown> | undefined;
     if (active) return rowToTask(active);
     const monitorRuleId = trigger === 'auto' ? context.monitorRuleId : undefined;
+    const commitMessage = context.commit?.message ?? null;
+    const commitDate = context.commit?.date ?? null;
     let engineId: number | null = null;
     let engineSelectionError: string | null = null;
     try {
@@ -172,13 +182,14 @@ export class TaskQueue extends EventEmitter {
     const provider = pickProviderForTask(this.db, repoId);
     const info = this.db
       .prepare(
-        `INSERT INTO task (repo_id, source_version, node, trigger, status, author, monitor_rule_id, engine_id, engine_selection_error, provider_id, provider_label)
-         VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO task (repo_id, source_version, node, trigger, status, author, monitor_rule_id, engine_id, engine_selection_error, provider_id, provider_label, commit_message, commit_date)
+         VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         repoId, sourceVersion, node, trigger, author ?? null, monitorRuleId ?? null,
         engineId, engineSelectionError,
-        provider?.providerId ?? null, provider?.label ?? null
+        provider?.providerId ?? null, provider?.label ?? null,
+        commitMessage, commitDate
       );
     const record = this.get(Number(info.lastInsertRowid));
     this.kick();

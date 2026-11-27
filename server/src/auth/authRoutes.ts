@@ -63,7 +63,11 @@ export function buildAuthRoutes(
       url === '/api/health' ||
       url === '/api/auth/status' ||
       url === '/api/auth/login' ||
-      url === '/api/auth/password'
+      url === '/api/auth/password' ||
+      // Share links: the random token in the path is the authorization.
+      // It grants read-only access to exactly one report (see share/).
+      /^\/api\/share\/[^/]+\/report$/.test(url) ||
+      /^\/api\/share\/[^/]+\/feedback$/.test(url)
     ) {
       return;
     }

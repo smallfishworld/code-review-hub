@@ -38,8 +38,14 @@ export type ChannelConfig = EmailChannelConfig | ChatChannelConfig;
 /** Values substituted into chat templates. */
 export interface NotificationContext {
   repo: string;
+  /** Repository URL (SVN path / git URL) as configured. */
+  repo_url: string;
   node: string;
   author: string;
+  /** Commit log message, snapshot taken at enqueue time. */
+  commit_message: string;
+  /** Commit date, local time (e.g. 2026-11-27 16:59). */
+  commit_date: string;
   status: string;
   summary: string;
   report_url: string;

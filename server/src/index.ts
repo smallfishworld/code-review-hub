@@ -20,6 +20,7 @@ import { MonitorService } from './monitor/monitorService.js';
 import { buildMonitorRoutes } from './monitor/monitorRoutes.js';
 import { buildProviderRoutes } from './providers/providerRoutes.js';
 import { buildNotificationRoutes } from './notifications/notificationRoutes.js';
+import { buildShareRoutes } from './share/shareRoutes.js';
 import { buildAuthRoutes } from './auth/authRoutes.js';
 import { LogService } from './logs/logService.js';
 import { buildLogRoutes } from './logs/logRoutes.js';
@@ -120,6 +121,11 @@ async function main() {
     workspaceInit,
   }).register(app);
   buildTaskRoutes(db, credentials, queue, dataDir).register(app);
+  const share = buildShareRoutes(db, reports, {
+    baseUrl: process.env.PUBLIC_BASE_URL ?? `http://localhost:${port}`,
+    dataDir,
+  });
+  share.register(app);
   buildMonitorRoutes(db, monitor).register(app);
   buildLogRoutes(logs).register(app);
   buildProviderRoutes(db, credentials).register(app);
@@ -128,7 +134,11 @@ async function main() {
   buildMemoryRoutes(db, credentials, dataDir).register(app);
   const notifications = buildNotificationRoutes(db, credentials, {
     reports,
-    senderOptions: { baseUrl: process.env.PUBLIC_BASE_URL ?? `http://localhost:${port}` },
+    senderOptions: {
+      baseUrl: process.env.PUBLIC_BASE_URL ?? `http://localhost:${port}`,
+      // Pushed links point at the read-only share page, not the console.
+      shareUrlFor: share.shareUrlFor,
+    },
   });
   notifications.register(app);
   notifications.sender?.start(events);

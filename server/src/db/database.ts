@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 export type RepoType = 'svn' | 'git';
 
-export const SCHEMA_VERSION = 13;
+export const SCHEMA_VERSION = 15;
 
 /**
  * Ordered, append-only list of migrations. Each entry runs once, tracked in
@@ -386,6 +386,37 @@ const MIGRATIONS: { version: number; name: string; up: (db: Database.Database) =
           SELECT id, task_id, issue_id, verdict, memory_id, note, created_at FROM review_feedback_old;
         DROP TABLE review_feedback_old;
         CREATE INDEX idx_review_feedback_task ON review_feedback(task_id);
+      `);
+    },
+  },
+  {
+    version: 14,
+    name: 'task-commit-metadata',
+    up: (db) => {
+      // Snapshot of the reviewed commit's log message and date, taken at
+      // enqueue time (same pattern as author). Powers notification
+      // placeholders {{commit_message}} / {{commit_date}} and richer history.
+      db.exec(`
+        ALTER TABLE task ADD COLUMN commit_message TEXT;
+        ALTER TABLE task ADD COLUMN commit_date TEXT;
+      `);
+    },
+  },
+  {
+    version: 15,
+    name: 'report-share-tokens',
+    up: (db) => {
+      // Per-task share tokens: a token in a pushed report link grants
+      // read-only access to that one report, nothing else. No expiry by
+      // design — pushed messages are archival; leaks are handled by
+      // rotating (regenerating) the token.
+      db.exec(`
+        CREATE TABLE report_share (
+          task_id INTEGER PRIMARY KEY REFERENCES task(id) ON DELETE CASCADE,
+          token TEXT NOT NULL UNIQUE,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          rotated_at TEXT
+        );
       `);
     },
   },

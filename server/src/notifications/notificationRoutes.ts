@@ -3,7 +3,7 @@ import type Database from 'better-sqlite3';
 import type { CredentialService } from '../crypto/credentialService.js';
 import { ChannelError, ChannelService, type ChannelInput } from './channelService.js';
 import { EmailChannel, type TransportFactory } from './emailChannel.js';
-import { ChatChannel } from './chatChannel.js';
+import { ChatChannel, sampleContext } from './chatChannel.js';
 import { NotificationSender, type SenderOptions } from './notificationSender.js';
 import type { ReportService } from '../tasks/reportService.js';
 
@@ -124,15 +124,18 @@ export function buildNotificationRoutes(
         return handle(err, reply);
       }
       try {
+        // Test context defaults to the canned sample; callers may override
+        // any field (e.g. the author, so the test message reaches a real
+        // recipient on template-routed channels).
+        const body = (req.body ?? {}) as { context?: Record<string, string> };
+        const context = { ...sampleContext(), ...(body.context ?? {}) };
         if (channel.type === 'email') {
           await email.sendRaw(channelId, {
             subject: '【代码评审平台】测试邮件',
             text: '这是一封测试邮件，收到即表示邮件通知渠道配置正确。',
           });
         } else {
-          await chat.sendRaw(channelId, {
-            text: '【代码评审平台】测试消息：收到即表示聊天机器人渠道配置正确。',
-          });
+          await chat.send(channelId, context);
         }
         return { ok: true, message: '发送成功' };
       } catch (err) {

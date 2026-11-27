@@ -362,6 +362,7 @@ export class MonitorService {
     }
     const task = this.queue.enqueueIfNew(rule.repo_id, String(entry.revision), 'auto', entry.author, {
       sourceVersion, monitorRuleId: rule.id,
+      commit: { message: entry.message, date: entry.date },
     });
     if (task) {
       this.logNode(rule.id, String(entry.revision), 'triggered', '命中监控规则', entry.author);
@@ -391,6 +392,7 @@ export class MonitorService {
     }
     const task = this.queue.enqueueIfNew(rule.repo_id, entry.sha, 'auto', entry.authorName, {
       sourceVersion, monitorRuleId: rule.id,
+      commit: { message: entry.message, date: entry.date },
     });
     if (task) {
       this.logNode(rule.id, entry.sha, 'triggered', '命中监控规则', entry.authorName);

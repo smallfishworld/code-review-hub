@@ -15,9 +15,13 @@ dist-win/
 .agents/
 dist-mac/
 
-# Internal HikLink robot docs (protocol extract + pasted source).
-# Internal-company material: keep local only, never publish to GitHub.
+# Internal company material (protocol extracts, pasted source, reference
+# archives, credentials). Keep local only, never publish to GitHub.
 docs/hiklink-robot/
+docs/*.zip
+docs/openapi.txt
+docs/code-review-hub生产密钥.txt
+docs/code-review-hub生产-账号密钥信息.*
 
 # Local tool artifacts (Mimosa policy file .mimosa/security-policy.json IS tracked;
 # only runtime state is ignored)

@@ -61,6 +61,7 @@ export class TriggerService {
     return this.queue.enqueue(failed.repoId, failed.node, failed.trigger, failed.author, {
       sourceVersion: repo.source_version,
       monitorRuleId: failed.monitorRuleId,
+      commit: { message: failed.commitMessage, date: failed.commitDate },
     });
   }
 
@@ -95,13 +96,14 @@ export class TriggerService {
       if (!entry || entry.revision !== rev) {
         throw new TriggerError(`revision ${rev} 不存在`, 404);
       }
-      const task = this.enqueue(repo, String(rev), entry.author, opts.force);
+      const task = this.enqueue(repo, String(rev), entry.author, opts.force, entry);
       return { task, duplicate: task === null };
     }
 
     // git: short or full sha must resolve and be unique
     const sha = await this.resolveGitCommit(repo, auth, node);
-    const task = this.enqueue(repo, sha, undefined, opts.force);
+    const entry = await this.gitLogSingle(workCopyDir(this.dataDir, repo.id, repo.source_version), sha);
+    const task = this.enqueue(repo, sha, entry.authorName, opts.force, entry);
     return { task, duplicate: task === null };
   }
 
@@ -202,7 +204,7 @@ export class TriggerService {
     const tasks: TaskRecord[] = [];
     let duplicates = 0;
     for (const e of entries) {
-      const t = this.enqueue(repo, String(e.revision), e.author, force);
+      const t = this.enqueue(repo, String(e.revision), e.author, force, e);
       if (t) tasks.push(t);
       else duplicates++;
     }
@@ -263,7 +265,7 @@ export class TriggerService {
     const tasks: TaskRecord[] = [];
     let duplicates = 0;
     for (const e of entries) {
-      const t = this.enqueue(repo, e.sha, e.authorName, force);
+      const t = this.enqueue(repo, e.sha, e.authorName, force, e);
       if (t) tasks.push(t);
       else duplicates++;
     }
@@ -282,11 +284,17 @@ export class TriggerService {
     return entry;
   }
 
-  private enqueue(repo: RepoRow, node: string, author?: string, force?: boolean): TaskRecord | null {
+  private enqueue(
+    repo: RepoRow,
+    node: string,
+    author?: string,
+    force?: boolean,
+    commit?: { message?: string; date?: string }
+  ): TaskRecord | null {
     if (repoSourceVersion(this.db, repo.id) !== repo.source_version) {
       throw new TriggerError('仓库来源已变更，请重新选择评审节点', 409);
     }
-    const context = { sourceVersion: repo.source_version };
+    const context = { sourceVersion: repo.source_version, commit };
     return force === true
       ? this.queue.enqueue(repo.id, node, 'manual', author, context)
       : this.queue.enqueueIfNew(repo.id, node, 'manual', author, context);

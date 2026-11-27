@@ -6,7 +6,7 @@ import type { ChannelService, ChannelDto } from './channelService.js';
 import type { EmailChannel } from './emailChannel.js';
 import type { ChatChannel } from './chatChannel.js';
 import { matchesTrigger, type NotificationContext } from './types.js';
-import { statusLabel } from './render.js';
+import { statusLabel, formatCommitDate } from './render.js';
 
 /**
  * Notification sender (task 6.4).
@@ -21,6 +21,12 @@ import { statusLabel } from './render.js';
 export interface SenderOptions {
   /** Public base URL used to build report links. */
   baseUrl?: string;
+  /**
+   * Builds the share URL for a task (creates a share token on demand).
+   * When provided, {{report_url}} points at the read-only share page
+   * instead of the (login-gated) console task page.
+   */
+  shareUrlFor?: (taskId: number) => string | null;
   /** Total delivery attempts per channel (default 3). */
   attempts?: number;
   /** Backoff delays between attempts, ms (default 500, 1500). */
@@ -47,6 +53,7 @@ export class NotificationSender {
   private readonly retryDelaysMs: number[];
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly baseUrl: string;
+  private readonly shareUrlFor?: (taskId: number) => string | null;
 
   constructor(
     private readonly db: Database.Database,
@@ -60,6 +67,7 @@ export class NotificationSender {
     this.retryDelaysMs = options.retryDelaysMs ?? [500, 1500];
     this.sleep = options.sleep ?? defaultSleep;
     this.baseUrl = (options.baseUrl ?? 'http://localhost:3000').replace(/\/+$/, '');
+    this.shareUrlFor = options.shareUrlFor;
   }
 
   /** Subscribe to terminal events. Returns an unsubscribe function. */
@@ -88,8 +96,8 @@ export class NotificationSender {
 
   /** Build the template context for a task. */
   buildContext(task: TaskRecord): NotificationContext {
-    const repo = this.db.prepare('SELECT name FROM repo WHERE id = ?').get(task.repoId) as
-      | { name: string }
+    const repo = this.db.prepare('SELECT name, url FROM repo WHERE id = ?').get(task.repoId) as
+      | { name: string; url: string }
       | undefined;
     let summary: string;
     if (task.status === 'succeeded') {
@@ -100,11 +108,17 @@ export class NotificationSender {
     }
     return {
       repo: repo?.name ?? `repo#${task.repoId}`,
+      repo_url: repo?.url ?? '',
       node: task.node,
       author: task.author ?? '未知',
+      commit_message: task.commitMessage ?? '',
+      commit_date: task.commitDate ? formatCommitDate(task.commitDate) : '',
       status: statusLabel(task.status),
       summary,
-      report_url: `${this.baseUrl}/tasks/${task.id}`,
+      // Prefer the share link: recipients get a read-only report page that
+      // needs no login. Fallback = console URL (e.g. share table missing).
+      report_url:
+        this.shareUrlFor?.(task.id) ?? `${this.baseUrl}/tasks/${task.id}`,
     };
   }
 

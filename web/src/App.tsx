@@ -17,6 +17,7 @@ import { RepoMemoryPage } from './pages/RepoMemoryPage';
 import { NotificationsPage } from './pages/NotificationsPage';
 import { LogsPage } from './pages/LogsPage';
 import { SettingsPage } from './pages/SettingsPage';
+import ShareReportPage from './pages/ShareReportPage';
 import './App.css';
 
 export default function App() {
@@ -28,6 +29,9 @@ export default function App() {
             <BrowserRouter>
               <Routes>
                 <Route path="/login" element={<LoginPage />} />
+                {/* Public read-only report view — token in the path is the
+                    authorization; deliberately outside the console layout. */}
+                <Route path="/share/:token" element={<ShareReportPage />} />
                 <Route
                   element={
                     <RequireAuth>

@@ -296,6 +296,13 @@ function TaskDetail({ taskId }: { taskId: number }) {
   );
   const flash = useFlash();
   const [busy, setBusy] = useState(false);
+  const share = useApi(
+    () => api.get<{ token: string; url: string; rotatedAt: string | null }>(
+      `/api/tasks/${taskId}/share`
+    ).catch((e: unknown) => ((e as ApiError)?.status === 404 ? null : null)),
+    [taskId]
+  );
+  const [shareBusy, setShareBusy] = useState(false);
   const [pendingFeedback, setPendingFeedback] = useState<{
     issueId: number;
     verdict: 'false_positive' | 'wont_fix';
@@ -388,6 +395,44 @@ function TaskDetail({ taskId }: { taskId: number }) {
     }
   };
 
+  const createShare = async () => {
+    setShareBusy(true);
+    try {
+      await api.post(`/api/tasks/${taskId}/share`);
+      await share.reload();
+    } catch (err) {
+      flash.fail(errorText(err));
+    } finally {
+      setShareBusy(false);
+    }
+  };
+
+  const rotateShare = async () => {
+    setShareBusy(true);
+    try {
+      await api.post(`/api/tasks/${taskId}/share/rotate`);
+      await share.reload();
+      flash.ok('已重新生成分享链接，旧链接已失效');
+    } catch (err) {
+      flash.fail(errorText(err));
+    } finally {
+      setShareBusy(false);
+    }
+  };
+
+  const revokeShare = async () => {
+    setShareBusy(true);
+    try {
+      await api.del(`/api/tasks/${taskId}/share`);
+      await share.reload();
+      flash.ok('已吊销分享链接');
+    } catch (err) {
+      flash.fail(errorText(err));
+    } finally {
+      setShareBusy(false);
+    }
+  };
+
   const item = task.data;
   const refresh = () =>
     Promise.all([task.reload(), report.reload(), mcpAudit.reload(), memoryAudit.reload()]);
@@ -474,6 +519,41 @@ function TaskDetail({ taskId }: { taskId: number }) {
           {item.error && (
             <div className="alert error" role="alert">
               {t('tasks.detail.failureReason', { error: item.error })}
+            </div>
+          )}
+        </section>
+      )}
+
+      {status === 'succeeded' && (
+        <section className="card" aria-labelledby="task-share-title">
+          <div className="card-head">
+            <h2 id="task-share-title">{t('tasks.detail.shareTitle')}</h2>
+          </div>
+          <p className="muted">{t('tasks.detail.shareHint')}</p>
+          {share.data ? (
+            <div className="share-controls">
+              <code className="mono share-url">{share.data.url}</code>
+              <div className="actions">
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => void navigator.clipboard?.writeText(share.data!.url)}
+                >
+                  {t('tasks.detail.shareCopy')}
+                </button>
+                <button type="button" className="secondary" onClick={() => void rotateShare()} disabled={shareBusy}>
+                  {t('tasks.detail.shareRotate')}
+                </button>
+                <button type="button" className="danger" onClick={() => void revokeShare()} disabled={shareBusy}>
+                  {t('tasks.detail.shareRevoke')}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="actions">
+              <button type="button" className="secondary" onClick={() => void createShare()} disabled={shareBusy}>
+                {t('tasks.detail.shareCreate')}
+              </button>
             </div>
           )}
         </section>

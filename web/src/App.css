@@ -1762,6 +1762,138 @@
       min-block-size: 36px;
     }
   }
+
+  /* ---------------------------------------------------------------- share view
+     Public read-only report page (/share/:token). No console chrome. */
+  .share-page {
+    min-height: 100vh;
+    min-height: 100dvh;
+    padding: 32px 24px 64px;
+    background:
+      radial-gradient(64rem 34rem at 20% -5%, var(--accent-bg), transparent 60%),
+      var(--bg-subtle);
+  }
+
+  .share-shell {
+    inline-size: min(1280px, 100%);
+    margin-inline: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .share-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding-block-end: 4px;
+  }
+
+  .share-head h1 {
+    margin: 0 0 6px;
+    font-size: 22px;
+  }
+
+  .share-subtitle {
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    color: var(--text);
+    opacity: 0.85;
+    font-size: 13.5px;
+  }
+
+  .share-meta-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 14px 24px;
+    padding: 18px 20px;
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+    border: 1px solid var(--border);
+  }
+
+  .share-meta-grid > div {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-inline-size: 0;
+  }
+
+  .share-meta-grid .share-meta-wide {
+    grid-column: 1 / -1;
+  }
+
+  .share-meta-label {
+    font-size: 12px;
+    letter-spacing: 0.01em;
+    color: var(--text);
+    opacity: 0.65;
+  }
+
+  .share-meta-value {
+    font-size: 13.5px;
+    color: var(--text-h);
+    overflow-wrap: anywhere;
+  }
+
+  .share-section {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .share-section h2 {
+    margin: 0;
+    font-size: 15px;
+  }
+
+  .share-dialog-backdrop {
+    position: fixed;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 16px;
+    background: rgb(0 0 0 / 0.45);
+    z-index: 50;
+  }
+
+  .share-dialog {
+    inline-size: min(520px, 100%);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 20px;
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+    box-shadow: var(--shadow-md);
+  }
+
+  .share-dialog h2 {
+    margin: 0;
+    font-size: 16px;
+  }
+
+  .share-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .share-url {
+    flex: 1;
+    min-inline-size: 240px;
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
+    background: var(--surface-subtle);
+    border: 1px solid var(--border);
+    overflow-wrap: anywhere;
+    font-size: 12.5px;
+  }
 }
 
 /* Entry animation for the freshly mounted toast. @starting-style must stay

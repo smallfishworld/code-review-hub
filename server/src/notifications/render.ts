@@ -27,6 +27,19 @@ export function statusLabel(status: string): string {
   return STATUS_LABELS[status] ?? status;
 }
 
+/**
+ * Local-time rendering of a commit date for notifications, e.g.
+ * "2026-11-27 16:59" in the server's local timezone. Falls back to the raw
+ * string when the input is not parseable; empty stays empty.
+ */
+export function formatCommitDate(iso: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 export interface RenderedEmail {
   subject: string;
   text: string;
@@ -38,9 +51,11 @@ export function renderEmail(context: NotificationContext): RenderedEmail {
   const label = statusLabel(context.status);
   const subject = `【代码评审】${context.repo} ${context.node} ${label}`;
   const lines = [
-    `仓库：${context.repo}`,
+    `仓库：${context.repo}（${context.repo_url}）`,
     `节点：${context.node}`,
     `上库人员：${context.author || '未知'}`,
+    `上库时间：${context.commit_date || '未知'}`,
+    `上库日志：${context.commit_message || '（无）'}`,
     `任务状态：${label}`,
     `评审摘要：${context.summary}`,
     `报告链接：${context.report_url}`,
@@ -50,9 +65,11 @@ export function renderEmail(context: NotificationContext): RenderedEmail {
     '<div style="font-family:sans-serif;line-height:1.6">',
     `<h3 style="margin:0 0 12px">${escapeHtml(subject)}</h3>`,
     '<table cellpadding="4" style="border-collapse:collapse">',
-    row('仓库', context.repo),
+    row('仓库', `${context.repo}（${context.repo_url}）`),
     row('节点', context.node),
     row('上库人员', context.author || '未知'),
+    row('上库时间', context.commit_date || '未知'),
+    row('上库日志', context.commit_message || '（无）'),
     row('任务状态', label),
     row('评审摘要', context.summary),
     `<tr><td style="color:#666">报告链接</td><td><a href="${escapeHtml(
