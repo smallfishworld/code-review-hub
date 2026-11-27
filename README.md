@@ -1,3 +1,5 @@
+<p align="center"><img src="web/public/logo.png" alt="Code Review Hub logo" width="96" height="96" /></p>
+
 # code-review-hub（自动化代码评审平台）
 
 **简体中文** | [English](README.en.md)
@@ -68,6 +70,8 @@ macOS 使用 Homebrew：`brew install subversion`。
 ---
 
 ## 2. 安装与启动
+
+本地交互式启动（`npm start`、Windows `start.cmd`、macOS `start.command` / `start.sh`、Linux `start.sh`）会在 Web 服务监听成功后自动打开默认浏览器。无图形界面、SSH、CI 或后台服务默认不打开；可设置 `OPEN_BROWSER=false` 禁用，或在具备图形环境时设置 `OPEN_BROWSER=true` 显式启用。
 
 ### 2.1 Linux
 

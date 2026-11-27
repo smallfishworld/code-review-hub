@@ -28,6 +28,7 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import fastifyStatic from '@fastify/static';
+import { browserUrl, shouldOpenBrowser, openBrowser } from './startup/browser.js';
 
 const port = Number(process.env.PORT ?? 3000);
 const host = process.env.HOST ?? '0.0.0.0';
@@ -171,6 +172,11 @@ async function main() {
 
   await app.listen({ port, host });
   app.log.info(`code review platform listening on http://${host}:${port} (data: ${dataDir})`);
+  if (webDist && shouldOpenBrowser(process.env, process.platform, Boolean(process.stdout.isTTY), process.argv.includes('--open-browser'))) {
+    const address = app.server.address();
+    const actualPort = typeof address === 'object' && address ? address.port : port;
+    openBrowser(browserUrl(host, actualPort), (message) => logs.warn('server', `Browser launch failed: ${message}`));
+  }
 }
 
 main().catch((err) => {

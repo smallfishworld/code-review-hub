@@ -162,6 +162,7 @@ export function Layout() {
       </a>
       <aside className="sidebar">
         <div className="brand">
+          <img className="brand-mark" src="/logo.png" alt="" aria-hidden="true" width={32} height={32} />
           <div className="brand-text">
             <span className="brand-title">{t('app.name')}</span>
             <span className="brand-sub">{t('app.subtitle')}</span>
