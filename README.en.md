@@ -31,7 +31,7 @@ Pick a repository you use and verify the full end-to-end flow: **Push code → A
 
 | Dependency | Version | Notes |
 | --- | --- | --- |
-| Node.js | >= 20 (22 LTS recommended) | Backend runtime and frontend build |
+| Node.js | 22.13+ (22.x), 24.x, or 26+ (CI: 22.23.5) | Backend runtime and frontend build |
 | `ocr` | **>= 1.12.13** (`1.13.8-svn.1` recommended) | Review executor; `< 1.12.13` only supports SVN working-copy mode; **`< 1.13` automatically skips MCP & project memory injection** (reviews still run, degradation is recorded on the task) |
 | `svn` | **>= 1.9** (1.14.x recommended) | Required only for SVN repos (`ocr` uses `svn info --show-item`) |
 | `git` | >= 2.20 | Required only for Git repos |

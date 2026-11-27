@@ -31,7 +31,7 @@
 
 | 依赖 | 版本要求 | 说明 |
 | --- | --- | --- |
-| Node.js | >= 20（推荐 22 LTS） | 服务与前端构建 |
+| Node.js | 22.13+（22.x）、24.x 或 26+（CI 使用 22.23.5） | 服务与前端构建 |
 | `ocr` | **>= 1.12.13**（推荐最新 `1.13.8-svn.1`） | 评审执行器；低于 1.12.13 的版本只支持 SVN 工作副本模式；**< 1.13 时 MCP 注入与项目记忆注入自动降级跳过**（评审照常执行，任务记录标注降级原因） |
 | `svn` | **>= 1.9**（推荐 1.14.x） | 仅监控/评审 SVN 仓库时需要；`ocr` 用 `svn info --show-item` 探测工作副本 |
 | `git` | 任意较新版本（>= 2.20） | 仅监控/评审 Git 仓库时需要 |
@@ -120,7 +120,7 @@ $env:PORT="3000"; $env:DATA_DIR="D:\code\code-review-hub\data"; npm start
 
 ```bash
 # 1) 安装依赖
-brew install node subversion     # 或从 nodejs.org 安装 Node >= 20
+brew install node subversion     # 或从 nodejs.org 安装 Node 22 LTS（>= 22.13）
 npm install -g @smallfishworld/open-code-review-svn@1.13.8-svn.1
 
 # 2) 获取代码并安装依赖
