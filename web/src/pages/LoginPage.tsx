@@ -34,7 +34,7 @@ export function LoginPage() {
       <LanguageSwitcher className="login-lang" />
       <form className="card login-card" onSubmit={submit} aria-labelledby="login-title">
         <div className="login-brand">
-          <span className="brand-mark" aria-hidden="true" />
+          <img className="brand-mark" src="/logo.png" alt="" aria-hidden="true" width={44} height={44} />
           <div>
             <h1 id="login-title">{t('app.name')}</h1>
             <p className="muted small">

@@ -210,7 +210,7 @@ export DATA_DIR
 : "\${PUBLIC_BASE_URL:=http://$(hostname -s 2>/dev/null || echo localhost):$PORT}"
 export HOST PORT PUBLIC_BASE_URL
 
-exec "$PWD/bin/node" "$PWD/server/dist/index.js"
+exec "$PWD/bin/node" "$PWD/server/dist/index.js" --open-browser
 `;
 writeFileSync(join(PKG_DIR, 'start.sh'), startSh, 'utf8');
 chmodSync(join(PKG_DIR, 'start.sh'), 0o755);
@@ -225,6 +225,7 @@ WorkingDirectory=/opt/code-review-hub
 ExecStart=/opt/code-review-hub/start.sh
 Restart=on-failure
 RestartSec=5
+Environment=OPEN_BROWSER=false
 Environment=PORT=3000
 Environment=HOST=0.0.0.0
 Environment=DATA_DIR=/var/lib/code-review-hub
