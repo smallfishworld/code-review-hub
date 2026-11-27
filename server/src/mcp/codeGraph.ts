@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import type { TaskRecord } from '../tasks/taskQueue.js';
 import { workspaceKey } from '../repos/sourceVersion.js';
@@ -15,7 +15,8 @@ const sourceRun = import.meta.url.endsWith('.ts');
 export function codeGraphBridgeArgs(): string[] {
   const extension = sourceRun ? 'ts' : 'js';
   const entry = fileURLToPath(new URL(`../codegraph-mcp-bridge.${extension}`, import.meta.url));
-  return sourceRun ? ['--import', require.resolve('tsx'), entry] : [entry];
+  // Node's ESM --import requires a file URL for Windows drive-letter paths.
+  return sourceRun ? ['--import', pathToFileURL(require.resolve('tsx')).href, entry] : [entry];
 }
 
 const run = promisify(execFile);
