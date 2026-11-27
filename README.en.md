@@ -1,3 +1,5 @@
+<p align="center"><img src="web/public/logo.png" alt="Code Review Hub logo" width="96" height="96" /></p>
+
 # code-review-hub (Automated AI Code Review Platform)
 
 [简体中文](README.md) | **English**
@@ -64,6 +66,8 @@ Configure LLM credentials for `ocr` via either method:
 ---
 
 ## 2. Installation & Startup
+
+Interactive local launches (`npm start`, Windows `start.cmd`, macOS `start.command` / `start.sh`, Linux `start.sh`) open the default browser only after the web server is listening. Headless, SSH, CI and background service launches do not open it by default. Set `OPEN_BROWSER=false` to disable it, or `OPEN_BROWSER=true` to explicitly enable it on a graphical desktop.
 
 ### 2.1 Portable Release Packages (Recommended)
 

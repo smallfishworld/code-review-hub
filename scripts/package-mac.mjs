@@ -229,7 +229,7 @@ export DATA_DIR
 : "\${PUBLIC_BASE_URL:=http://$(hostname -s):$PORT}"
 export HOST PORT PUBLIC_BASE_URL
 
-exec "$PWD/bin/node" "$PWD/server/dist/index.js"
+exec "$PWD/bin/node" "$PWD/server/dist/index.js" --open-browser
 `;
 writeFileSync(join(PKG_DIR, 'start.sh'), startSh, 'utf8');
 chmodSync(join(PKG_DIR, 'start.sh'), 0o755);
@@ -270,6 +270,8 @@ const plist = `<?xml version="1.0" encoding="UTF-8"?>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
+    <key>OPEN_BROWSER</key>
+    <string>false</string>
     <key>PORT</key>
     <string>3000</string>
     <key>HOST</key>

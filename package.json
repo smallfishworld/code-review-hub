@@ -16,7 +16,7 @@
     "build:web": "npm --prefix web run build",
     "test": "vitest run",
     "test:watch": "vitest",
-    "start": "node server/dist/index.js",
+    "start": "node server/dist/index.js --open-browser",
     "package:win": "node scripts/package-win.mjs",
     "package:mac": "node scripts/package-mac.mjs",
     "package:linux": "node scripts/package-linux.mjs",

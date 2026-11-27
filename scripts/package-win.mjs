@@ -232,7 +232,7 @@ ECHO.
 ECHO   Close this window to stop the service.
 ECHO.
 
-"%~dp0node.exe" "%~dp0server\\dist\\index.js"
+"%~dp0node.exe" "%~dp0server\\dist\\index.js" --open-browser
 SET "EXITCODE=%ERRORLEVEL%"
 
 ECHO.
@@ -251,6 +251,7 @@ IF "%DATA_DIR%"=="" SET "DATA_DIR=%~dp0data"
 IF "%HOST%"=="" SET "HOST=0.0.0.0"
 IF "%PORT%"=="" SET "PORT=3000"
 IF "%PUBLIC_BASE_URL%"=="" SET "PUBLIC_BASE_URL=http://%COMPUTERNAME%:%PORT%"
+IF "%OPEN_BROWSER%"=="" SET "OPEN_BROWSER=false"
 start "" /B "%~dp0node.exe" "%~dp0server\\dist\\index.js"
 ENDLOCAL
 `;
