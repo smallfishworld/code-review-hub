@@ -308,4 +308,67 @@ describe('notification sender', () => {
     expect(body[0].channelType).toBe('chat');
     await app.close();
   });
+
+  it('routes failed review alerts to admins instead of the commit developer', async () => {
+    const repoId = addRepo();
+    const failedTask = addTask(repoId, 'failed', '模型超时');
+    channels.setFailurePolicy({
+      autoRetries: 2,
+      notifyAdminsOnFailure: true,
+      adminRecipients: ['ops-admin', 'ops@example.com'],
+    });
+    addChatChannel('bot');
+    addEmailChannel('mail');
+
+    const { email, sent } = fakeEmail();
+    const { chat, payloads } = fakeChat();
+    const s = sender(email, chat, { attempts: 1 });
+    await s.notify(failedTask);
+
+    expect(payloads).toHaveLength(1);
+    const chatText = (payloads[0] as { text: string }).text;
+    expect(chatText).toContain('ops-admin');
+    expect(chatText).not.toContain('ops@example.com'); // chat author excludes email when non-email IDs exist
+    expect(chatText).toContain('管理员排查');
+    expect(chatText).toContain('已自动重试 2 次仍失败');
+    expect(chatText).toContain(`/tasks/${failedTask.id}`);
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].to).toEqual(['ops@example.com']);
+  });
+
+  it('routes registration alerts to admins and escapes HTML in sendRaw email body', async () => {
+    channels.setFailurePolicy({
+      adminRecipients: ['superadmin', 'admin@example.com'],
+    });
+    addChatChannel('bot');
+    addEmailChannel('mail');
+
+    const sentMessages: { to: string; html: string; subject: string }[] = [];
+    const capturingEmail = new EmailChannel(channels, () => ({
+      sendMail: async (msg) => {
+        sentMessages.push({ to: msg.to, html: msg.html, subject: msg.subject });
+      },
+    }));
+    const { chat, payloads } = fakeChat();
+    const s = sender(capturingEmail, chat, { attempts: 1 });
+
+    await s.notifyRegistration({
+      username: 'alice',
+      displayName: '<b>Alice</b>',
+      email: 'alice@example.com',
+      reason: '<script>alert(1)</script>',
+    });
+
+    expect(payloads).toHaveLength(1);
+    const chatText = (payloads[0] as { text: string }).text;
+    // Chat recipient routes to admin, not the applicant
+    expect(chatText).toContain('上库人员：superadmin');
+    expect(chatText).toContain('/admin/users?tab=registrations');
+
+    expect(sentMessages).toHaveLength(1);
+    expect(sentMessages[0].to).toBe('admin@example.com');
+    expect(sentMessages[0].html).not.toContain('<script>');
+    expect(sentMessages[0].html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+  });
 });

@@ -3,6 +3,7 @@ import type Database from 'better-sqlite3';
 import type { ReportService } from '../tasks/reportService.js';
 import { MemoryStore } from '../memory/store.js';
 import { FeedbackError, processFeedback, type FeedbackVerdict } from '../memory/feedback.js';
+import { clientIpOf } from '../auth/authRoutes.js';
 import { ShareError, ShareService } from './shareService.js';
 
 /**
@@ -62,18 +63,49 @@ export function buildShareRoutes(
         return reply.code(404).send({ message: '分享链接不存在或已失效' });
       }
       if (!memory) return reply.code(503).send({ message: '反馈功能未启用' });
-      const body = (req.body ?? {}) as { issueId?: number; verdict?: string; note?: string };
+      const body = (req.body ?? {}) as {
+        issueId?: number;
+        verdict?: string;
+        note?: string;
+        operatorName?: string;
+        clientInfo?: string;
+      };
       if (!body.issueId || !Number.isSafeInteger(body.issueId) || body.issueId < 1) {
         return reply.code(400).send({ message: 'issueId 必须为正整数' });
       }
       if (!['false_positive', 'fixed', 'wont_fix'].includes(String(body.verdict))) {
         return reply.code(400).send({ message: 'verdict 无效' });
       }
+      const ua = typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : '';
+      const platform =
+        typeof req.headers['sec-ch-ua-platform'] === 'string'
+          ? req.headers['sec-ch-ua-platform'].replace(/"/g, '')
+          : '';
+      const rawClientInfo = [
+        typeof body.clientInfo === 'string' ? body.clientInfo.trim() : '',
+        platform ? `OS:${platform}` : '',
+        ua ? `UA:${ua.slice(0, 140)}` : '',
+      ]
+        .filter(Boolean)
+        .join(' | ');
+      const authUser = req.authUser;
+      const operatorName =
+        typeof body.operatorName === 'string' && body.operatorName.trim()
+          ? body.operatorName.trim()
+          : authUser
+            ? `${authUser.displayName} (${authUser.username})`
+            : null;
       try {
         return processFeedback(db, memory, taskId, {
           issueId: body.issueId,
           verdict: body.verdict as FeedbackVerdict,
           note: body.note,
+          operator: {
+            userId: authUser && authUser.id > 0 ? authUser.id : null,
+            operatorName,
+            clientIp: clientIpOf(req),
+            clientInfo: rawClientInfo || null,
+          },
         });
       } catch (err) {
         if (err instanceof FeedbackError) {

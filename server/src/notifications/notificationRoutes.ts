@@ -162,6 +162,21 @@ export function buildNotificationRoutes(
         return handle(err, reply);
       }
     });
+
+    app.get('/api/notifications/failure-policy', async () => service.getFailurePolicy());
+
+    app.put('/api/notifications/failure-policy', async (req, reply) => {
+      const body = (req.body ?? {}) as {
+        autoRetries?: number;
+        notifyAdminsOnFailure?: boolean;
+        adminRecipients?: string[];
+      };
+      try {
+        return service.setFailurePolicy(body);
+      } catch (err) {
+        return handle(err, reply);
+      }
+    });
   };
 
   return { register, service, email, chat, sender };

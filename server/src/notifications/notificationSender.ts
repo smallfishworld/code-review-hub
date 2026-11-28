@@ -86,12 +86,110 @@ export class NotificationSender {
   async notify(task: TaskRecord): Promise<void> {
     if (task.status !== 'succeeded' && task.status !== 'failed') return;
     if (!matchesTrigger(this.channels.getTrigger(), task.status)) return;
+    if (task.status === 'failed' && !this.channels.getFailurePolicy().notifyAdminsOnFailure) {
+      return;
+    }
 
     const channels = this.channels.enabledChannels();
     if (channels.length === 0) return;
 
     const context = this.buildContext(task);
-    await Promise.all(channels.map((channel) => this.deliver(channel, context, task.id)));
+    const adminEmails = task.status === 'failed' ? this.resolveAdminEmails() : [];
+    await Promise.all(
+      channels.map((channel) =>
+        this.deliver(channel, context, task.id, {
+          isFailureAlert: task.status === 'failed',
+          adminEmails,
+        })
+      )
+    );
+  }
+
+  /** Resolve admin identifiers for failure / registration alerts (never the commit developer). */
+  private resolveAdminRecipients(): { chatIds: string[]; emails: string[] } {
+    const policy = this.channels.getFailurePolicy();
+    if (policy.adminRecipients.length > 0) {
+      const emails = policy.adminRecipients.filter((r) => r.includes('@'));
+      const nonEmails = policy.adminRecipients.filter((r) => !r.includes('@'));
+      return {
+        chatIds: nonEmails.length > 0 ? nonEmails : policy.adminRecipients,
+        emails,
+      };
+    }
+    try {
+      const rows = this.db
+        .prepare(
+          `SELECT u.username, u.email
+           FROM user u LEFT JOIN role r ON r.id = u.role_id
+           WHERE u.status = 'active'
+             AND (u.is_super_admin = 1 OR r.name = '服务管理员')
+           ORDER BY u.is_super_admin DESC, u.id ASC`
+        )
+        .all() as { username: string; email: string | null }[];
+      const chatIds = rows.map((r) => r.username).filter(Boolean);
+      const emails = rows.map((r) => r.email).filter((e): e is string => Boolean(e && e.includes('@')));
+      return { chatIds, emails };
+    } catch {
+      return { chatIds: [], emails: [] };
+    }
+  }
+
+  private resolveAdminEmails(): string[] {
+    return this.resolveAdminRecipients().emails;
+  }
+
+  /** Notify admins via all enabled channels when a new registration request arrives. */
+  async notifyRegistration(req: {
+    username: string;
+    displayName: string;
+    email: string | null;
+    reason: string;
+  }): Promise<void> {
+    const channels = this.channels.enabledChannels();
+    if (channels.length === 0) return;
+
+    const approvalUrl = `${this.baseUrl}/admin/users?tab=registrations`;
+    const admins = this.resolveAdminRecipients();
+    const subject = `【代码评审平台】新账号注册申请：${req.displayName}（${req.username}）`;
+    const lines = [
+      `有新的用户提交了账号注册申请，请登录控制台审批：`,
+      `用户名：${req.username}`,
+      `显示名：${req.displayName}`,
+      ...(req.email ? [`邮箱：${req.email}`] : []),
+      `申请理由：${req.reason || '（未填写）'}`,
+      `审批链接：${approvalUrl}`,
+    ];
+    const text = lines.join('\n');
+    const context: NotificationContext = {
+      repo: '账号注册申请',
+      repo_url: approvalUrl,
+      node: req.username,
+      // Route chat webhook notifications to admins, not the applicant.
+      author: admins.chatIds.length > 0 ? admins.chatIds.join(',') : 'admin',
+      commit_message: req.reason || '申请开通平台账号',
+      commit_date: formatCommitDate(new Date().toISOString()),
+      status: '待审批',
+      summary: `新用户 ${req.displayName}（${req.username}）申请注册账号${req.reason ? `，理由：${req.reason}` : ''}`,
+      report_url: approvalUrl,
+    };
+
+    await Promise.all(
+      channels.map(async (channel) => {
+        try {
+          if (channel.type === 'email') {
+            await this.email.sendRaw(channel.id, {
+              subject,
+              text,
+              to: admins.emails.length > 0 ? admins.emails : undefined,
+            });
+          } else {
+            await this.chat.send(channel.id, context);
+          }
+        } catch (err) {
+          console.error(`[notify] registration alert failed for channel ${channel.name}:`, err);
+        }
+      })
+    );
   }
 
   /** Build the template context for a task. */
@@ -99,13 +197,29 @@ export class NotificationSender {
     const repo = this.db.prepare('SELECT name, url FROM repo WHERE id = ?').get(task.repoId) as
       | { name: string; url: string }
       | undefined;
-    let summary: string;
-    if (task.status === 'succeeded') {
-      const report = this.reports.get(task.id);
-      summary = report?.summary ?? '评审完成（无报告摘要）';
-    } else {
-      summary = task.error ? `评审失败：${task.error}` : '评审失败';
+    if (task.status === 'failed') {
+      const policy = this.channels.getFailurePolicy();
+      const admins = this.resolveAdminRecipients().chatIds;
+      const retryNote = policy.autoRetries > 0 ? `（已自动重试 ${policy.autoRetries} 次仍失败）` : '';
+      const commitAuthor = task.author ?? '未知';
+      const reason = task.error ? `评审失败${retryNote}：${task.error}` : `评审失败${retryNote}`;
+      return {
+        repo: repo?.name ?? `repo#${task.repoId}`,
+        repo_url: repo?.url ?? '',
+        node: task.node,
+        // Failure alerts route to admins rather than the commit developer.
+        author: admins.length > 0 ? admins.join(',') : 'admin',
+        commit_message: task.commitMessage ?? '',
+        commit_date: task.commitDate ? formatCommitDate(task.commitDate) : '',
+        status: statusLabel(task.status),
+        summary: `【管理员排查】上库人：${commitAuthor}；${reason}`,
+        // Link admins directly to the console task detail page to inspect logs.
+        report_url: `${this.baseUrl}/tasks/${task.id}`,
+      };
     }
+
+    const report = this.reports.get(task.id);
+    const summary = report?.summary ?? '评审完成（无报告摘要）';
     return {
       repo: repo?.name ?? `repo#${task.repoId}`,
       repo_url: repo?.url ?? '',
@@ -126,13 +240,32 @@ export class NotificationSender {
   private async deliver(
     channel: ChannelDto,
     context: NotificationContext,
-    taskId: number
+    taskId: number,
+    opts?: { isFailureAlert?: boolean; adminEmails?: string[] }
   ): Promise<void> {
     let lastError = '';
     for (let attempt = 1; attempt <= this.attempts; attempt++) {
       try {
-        if (channel.type === 'email') await this.email.send(channel.id, context);
-        else await this.chat.send(channel.id, context);
+        if (channel.type === 'email') {
+          if (opts?.isFailureAlert) {
+            const subject = `【代码评审异常告警】${context.repo} ${context.node} 评审失败`;
+            const text = [
+              `仓库：${context.repo}（${context.repo_url}）`,
+              `节点：${context.node}`,
+              `详情：${context.summary}`,
+              `任务日志：${context.report_url}`,
+            ].join('\n');
+            await this.email.sendRaw(channel.id, {
+              subject,
+              text,
+              to: opts.adminEmails && opts.adminEmails.length > 0 ? opts.adminEmails : undefined,
+            });
+          } else {
+            await this.email.send(channel.id, context);
+          }
+        } else {
+          await this.chat.send(channel.id, context);
+        }
         this.log(taskId, channel.id, 'sent', null);
         return;
       } catch (err) {

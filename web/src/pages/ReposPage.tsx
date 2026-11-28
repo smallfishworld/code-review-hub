@@ -2,6 +2,7 @@ import { useEffect, useId, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, type Provider, type Repo } from '../api/client';
 import { errorText, useApi, usePageTitle } from '../api/hooks';
+import { usePermission } from '../auth/AuthContext';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useFlash } from '../components/Toast';
 import { useI18n } from '../i18n';
@@ -36,6 +37,7 @@ const emptyForm: FormState = {
 export function ReposPage() {
   const { t, locale } = useI18n();
   usePageTitle(t('repos.pageTitle'));
+  const canEdit = usePermission('repo:edit');
   const repos = useApi(() => api.get<Repo[]>('/api/repos'));
   const providers = useApi(() => api.get<Provider[]>('/api/providers'));
   const flash = useFlash();
@@ -200,12 +202,15 @@ export function ReposPage() {
           <h1>{t('repos.pageTitle')}</h1>
           <p className="page-subtitle">{t('repos.subtitle')}</p>
         </div>
-        <button type="button" className="secondary" onClick={startCreate}>
-          {t('repos.addButton')}
-        </button>
+        {canEdit && (
+          <button type="button" className="secondary" onClick={startCreate}>
+            {t('repos.addButton')}
+          </button>
+        )}
       </div>
 
-      <div className="split">
+      <div className={canEdit ? 'split' : 'stack'}>
+        {canEdit && (
         <section className="card" aria-labelledby="repo-form-title">
           <h2 id="repo-form-title">
             {editingId === null ? t('repos.form.createTitle') : t('repos.form.editTitle')}
@@ -393,6 +398,7 @@ export function ReposPage() {
             </p>
           </form>
         </section>
+        )}
 
         <section className="card grow" aria-labelledby="repo-list-title">
           <h2 id="repo-list-title">{t('repos.list.title')}</h2>
@@ -443,17 +449,23 @@ export function ReposPage() {
                             {t('repos.list.downloading')}
                           </span>
                         ) : repo.initStatus === 'failed' ? (
-                          <button
-                            type="button"
-                            className="tag failed init-retry"
-                            title={repo.initError ?? t('repos.list.initFailed')}
-                            onClick={() => retryInit(repo)}
-                            disabled={retryingId === repo.id}
-                          >
-                            {retryingId === repo.id
-                              ? t('common.retrying')
-                              : t('repos.list.initFailedRetry')}
-                          </button>
+                          canEdit ? (
+                            <button
+                              type="button"
+                              className="tag failed init-retry"
+                              title={repo.initError ?? t('repos.list.initFailed')}
+                              onClick={() => retryInit(repo)}
+                              disabled={retryingId === repo.id}
+                            >
+                              {retryingId === repo.id
+                                ? t('common.retrying')
+                                : t('repos.list.initFailedRetry')}
+                            </button>
+                          ) : (
+                            <span className="tag failed" title={repo.initError ?? t('repos.list.initFailed')}>
+                              {t('repos.list.initFailed')}
+                            </span>
+                          )
                         ) : (
                           <span className="tag succeeded">{t('repos.list.initReady')}</span>
                         )}
@@ -464,34 +476,40 @@ export function ReposPage() {
                       </td>
                       <td className="actions-cell">
                         <div className="row-actions">
-                          <button type="button" className="link" onClick={() => startEdit(repo)}>
-                            {t('common.edit')}
-                            <span className="visually-hidden">
-                              {t('repos.list.srRepo', { name: repo.name })}
-                            </span>
-                          </button>
+                          {canEdit && (
+                            <button type="button" className="link" onClick={() => startEdit(repo)}>
+                              {t('common.edit')}
+                              <span className="visually-hidden">
+                                {t('repos.list.srRepo', { name: repo.name })}
+                              </span>
+                            </button>
+                          )}
                           <Link to={`/repos/${repo.id}/memory`}>
                             {t('repos.list.memory')}
                             <span className="visually-hidden">
                               {t('repos.list.srRepo', { name: repo.name })}
                             </span>
                           </Link>
-                          <button type="button" className="link" onClick={() => toggle(repo)}>
-                            {repo.enabled ? t('common.disable') : t('common.enable')}
-                            <span className="visually-hidden">
-                              {t('repos.list.srRepo', { name: repo.name })}
-                            </span>
-                          </button>
-                          <button
-                            type="button"
-                            className="link danger"
-                            onClick={() => remove(repo)}
-                          >
-                            {t('common.delete')}
-                            <span className="visually-hidden">
-                              {t('repos.list.srRepo', { name: repo.name })}
-                            </span>
-                          </button>
+                          {canEdit && (
+                            <>
+                              <button type="button" className="link" onClick={() => toggle(repo)}>
+                                {repo.enabled ? t('common.disable') : t('common.enable')}
+                                <span className="visually-hidden">
+                                  {t('repos.list.srRepo', { name: repo.name })}
+                                </span>
+                              </button>
+                              <button
+                                type="button"
+                                className="link danger"
+                                onClick={() => remove(repo)}
+                              >
+                                {t('common.delete')}
+                                <span className="visually-hidden">
+                                  {t('repos.list.srRepo', { name: repo.name })}
+                                </span>
+                              </button>
+                            </>
+                          )}
                         </div>
                       </td>
                     </tr>

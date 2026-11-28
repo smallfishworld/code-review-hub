@@ -146,7 +146,13 @@ export interface ReportIssue {
   suggestion?: string | null;
   suppressed?: boolean;
   suppressedBy?: number | null;
-  feedback?: { verdict: ReviewVerdict; note: string | null };
+  feedback?: {
+    verdict: ReviewVerdict;
+    note: string | null;
+    operatorName?: string | null;
+    clientIp?: string | null;
+    clientInfo?: string | null;
+  };
 }
 
 export interface ReportDetail {
@@ -235,12 +241,101 @@ export interface NotificationLog {
   createdAt: string;
 }
 
+export type Permission =
+  | 'repo:edit'
+  | 'monitor:edit'
+  | 'review:trigger'
+  | 'feedback:write'
+  | 'memory:edit'
+  | 'provider:edit'
+  | 'engine:edit'
+  | 'mcp:edit'
+  | 'notification:edit'
+  | 'log:manage'
+  | 'user:manage';
+
+export interface PermissionMeta {
+  id: Permission;
+  label: string;
+  description: string;
+  group: 'workspace' | 'models' | 'ops' | 'admin';
+}
+
+export interface AuthUserInfo {
+  id: number;
+  username: string;
+  displayName: string;
+  email: string | null;
+  roleId: number | null;
+  roleName: string | null;
+  isSuperAdmin: boolean;
+  permissions: Permission[];
+  mustChangePassword: boolean;
+}
+
 export interface AuthStatus {
   mode: string;
   loginRequired: boolean;
+  registrationEnabled: boolean;
   authenticated: boolean;
   username: string | null;
   displayName: string | null;
+  pendingRegistrations: number;
+  user: AuthUserInfo | null;
+}
+
+export interface RoleDto {
+  id: number;
+  name: string;
+  description: string;
+  permissions: Permission[];
+  builtin: boolean;
+  userCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UserDto {
+  id: number;
+  username: string;
+  displayName: string;
+  email: string | null;
+  roleId: number | null;
+  roleName: string | null;
+  isSuperAdmin: boolean;
+  status: 'active' | 'disabled';
+  mustChangePassword: boolean;
+  lastLoginAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RegistrationDto {
+  id: number;
+  username: string;
+  displayName: string;
+  email: string | null;
+  reason: string;
+  status: 'pending' | 'approved' | 'rejected';
+  roleId: number | null;
+  roleName: string | null;
+  reviewedBy: number | null;
+  reviewedByName: string | null;
+  reviewedAt: string | null;
+  rejectReason: string | null;
+  ip: string | null;
+  createdAt: string;
+}
+
+export interface AuditLogDto {
+  id: number;
+  userId: number | null;
+  username: string;
+  action: string;
+  target: string | null;
+  detail: string | null;
+  ip: string | null;
+  createdAt: string;
 }
 
 export interface DepInfo {
@@ -252,6 +347,18 @@ export interface DepInfo {
   conditional: boolean;
   minVersion?: string;
   note?: string;
+  officialUrl?: string;
+}
+
+export interface DepRepairResult {
+  ok: boolean;
+  command: string;
+  method?: string;
+  officialUrl: string;
+  manualCommand: string;
+  output: string;
+  error?: string;
+  report: { results: DepInfo[]; ok: boolean };
 }
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';

@@ -1,6 +1,7 @@
 import { useEffect, useId, useState } from 'react';
 import { api, type MonitorRule, type Repo } from '../api/client';
 import { errorText, useApi, usePageTitle } from '../api/hooks';
+import { usePermission } from '../auth/AuthContext';
 import { useFlash } from '../components/Toast';
 import { useI18n, type MessageKey } from '../i18n';
 
@@ -27,6 +28,7 @@ const INIT_LABEL_KEYS: Record<string, MessageKey> = {
 export function MonitorPage() {
   const { t, formatTime } = useI18n();
   usePageTitle(t('monitor.pageTitle'));
+  const canEdit = usePermission('monitor:edit');
   const repos = useApi(() => api.get<Repo[]>('/api/repos'));
   const rules = useApi(() => api.get<MonitorRule[]>('/api/monitor/rules'));
   const flash = useFlash();
@@ -152,51 +154,53 @@ export function MonitorPage() {
                   ))}
                 </select>
               </label>
-              <div className="two-col">
-                <label htmlFor={ids.interval}>
-                  {t('monitor.form.interval')}
-                  <input
-                    id={ids.interval}
-                    type="number"
-                    min={30}
-                    value={form.intervalSeconds}
-                    onChange={(e) =>
-                      setForm({ ...form, intervalSeconds: Number(e.target.value) })
-                    }
+              <fieldset className="form-fieldset" disabled={!canEdit}>
+                <div className="two-col">
+                  <label htmlFor={ids.interval}>
+                    {t('monitor.form.interval')}
+                    <input
+                      id={ids.interval}
+                      type="number"
+                      min={30}
+                      value={form.intervalSeconds}
+                      onChange={(e) =>
+                        setForm({ ...form, intervalSeconds: Number(e.target.value) })
+                      }
+                    />
+                  </label>
+                  <label htmlFor={ids.backtrack}>
+                    {t('monitor.form.backtrack')}
+                    <input
+                      id={ids.backtrack}
+                      type="number"
+                      min={0}
+                      value={form.backtrackNodes}
+                      onChange={(e) => setForm({ ...form, backtrackNodes: Number(e.target.value) })}
+                    />
+                  </label>
+                </div>
+                <p className="muted small form-hint">{t('monitor.form.backtrackHint')}</p>
+                <label htmlFor={ids.authors}>
+                  {t('monitor.form.authors')}
+                  <textarea
+                    id={ids.authors}
+                    rows={3}
+                    value={form.authorWhitelist}
+                    onChange={(e) => setForm({ ...form, authorWhitelist: e.target.value })}
+                    placeholder={'alice\nbob'}
                   />
                 </label>
-                <label htmlFor={ids.backtrack}>
-                  {t('monitor.form.backtrack')}
-                  <input
-                    id={ids.backtrack}
-                    type="number"
-                    min={0}
-                    value={form.backtrackNodes}
-                    onChange={(e) => setForm({ ...form, backtrackNodes: Number(e.target.value) })}
+                <label htmlFor={ids.paths}>
+                  {t('monitor.form.paths')}
+                  <textarea
+                    id={ids.paths}
+                    rows={3}
+                    value={form.pathPrefixes}
+                    onChange={(e) => setForm({ ...form, pathPrefixes: e.target.value })}
+                    placeholder={'trunk/src/\nsrc/main/'}
                   />
                 </label>
-              </div>
-              <p className="muted small form-hint">{t('monitor.form.backtrackHint')}</p>
-              <label htmlFor={ids.authors}>
-                {t('monitor.form.authors')}
-                <textarea
-                  id={ids.authors}
-                  rows={3}
-                  value={form.authorWhitelist}
-                  onChange={(e) => setForm({ ...form, authorWhitelist: e.target.value })}
-                  placeholder={'alice\nbob'}
-                />
-              </label>
-              <label htmlFor={ids.paths}>
-                {t('monitor.form.paths')}
-                <textarea
-                  id={ids.paths}
-                  rows={3}
-                  value={form.pathPrefixes}
-                  onChange={(e) => setForm({ ...form, pathPrefixes: e.target.value })}
-                  placeholder={'trunk/src/\nsrc/main/'}
-                />
-              </label>
+              </fieldset>
               {repo?.type === 'git' && (
                 <p className="muted small">
                   {t('monitor.form.gitBranchNote', { branch: repo.branch ?? 'main' })}
@@ -207,35 +211,39 @@ export function MonitorPage() {
                   {formError}
                 </div>
               )}
-              <div className="actions">
-                <button className="primary" type="submit" disabled={busy}>
-                  {t('monitor.form.save')}
-                </button>
-                {currentRule && (
-                  <button
-                    type="button"
-                    className={currentRule.enabled ? 'secondary' : 'primary'}
-                    disabled={busy}
-                    onClick={() =>
-                      currentRule.enabled
-                        ? action('disable', t('monitor.toast.disabled'))
-                        : action('enable', t('monitor.toast.enabled'))
-                    }
-                  >
-                    {currentRule.enabled ? t('monitor.form.disable') : t('monitor.form.enable')}
+              {canEdit ? (
+                <div className="actions">
+                  <button className="primary" type="submit" disabled={busy}>
+                    {t('monitor.form.save')}
                   </button>
-                )}
-                {currentRule && (
-                  <button
-                    type="button"
-                    className="secondary"
-                    disabled={busy}
-                    onClick={() => action('poll', t('monitor.toast.polled'))}
-                  >
-                    {t('monitor.form.pollNow')}
-                  </button>
-                )}
-              </div>
+                  {currentRule && (
+                    <button
+                      type="button"
+                      className={currentRule.enabled ? 'secondary' : 'primary'}
+                      disabled={busy}
+                      onClick={() =>
+                        currentRule.enabled
+                          ? action('disable', t('monitor.toast.disabled'))
+                          : action('enable', t('monitor.toast.enabled'))
+                      }
+                    >
+                      {currentRule.enabled ? t('monitor.form.disable') : t('monitor.form.enable')}
+                    </button>
+                  )}
+                  {currentRule && (
+                    <button
+                      type="button"
+                      className="secondary"
+                      disabled={busy}
+                      onClick={() => action('poll', t('monitor.toast.polled'))}
+                    >
+                      {t('monitor.form.pollNow')}
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <p className="small muted">当前角色仅可查看监控规则与运行状态。</p>
+              )}
               <p className="muted small" id={ids.hint}>
                 {t('monitor.form.hint')}
               </p>

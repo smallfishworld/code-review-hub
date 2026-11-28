@@ -1,6 +1,6 @@
 import nodemailer, { type Transporter } from 'nodemailer';
 import type { ChannelService } from './channelService.js';
-import { renderEmail, type RenderedEmail } from './render.js';
+import { escapeHtml, renderEmail, type RenderedEmail } from './render.js';
 import type { NotificationContext } from './types.js';
 
 /**
@@ -82,16 +82,18 @@ export class EmailChannel {
     await this.deliver(settings, this.render(context));
   }
 
-  /** Send an arbitrary message (test-send endpoint). */
+  /** Send an arbitrary message (test-send / admin alert). */
   async sendRaw(
     channelId: number,
-    message: { subject: string; text: string; html?: string }
+    message: { subject: string; text: string; html?: string; to?: string[] }
   ): Promise<void> {
     const settings = this.settings(channelId);
-    await this.deliver(settings, {
+    const targetSettings =
+      message.to && message.to.length > 0 ? { ...settings, to: message.to } : settings;
+    await this.deliver(targetSettings, {
       subject: message.subject,
       text: message.text,
-      html: message.html ?? `<pre>${message.text}</pre>`,
+      html: message.html ?? `<pre>${escapeHtml(message.text)}</pre>`,
     });
   }
 

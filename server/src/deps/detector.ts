@@ -17,6 +17,8 @@ export interface DependencyResult {
   minVersion?: string;
   /** human note shown in the console (e.g. SVN version requirement) */
   note?: string;
+  /** official download / package URL */
+  officialUrl?: string;
   /**
    * Whether this dependency is required unconditionally. svn/git are
    * conditional (only needed when a repo of that type is configured);
@@ -36,7 +38,7 @@ const WINDOWS = process.platform === 'win32';
 /** Commands the platform knows how to invoke, and their nature. */
 export const DEPENDENCY_SPECS: Record<
   string,
-  { conditional: boolean; minVersion?: string; note?: string }
+  { conditional: boolean; minVersion?: string; note?: string; officialUrl: string }
 > = {
   ocr: {
     conditional: false,
@@ -45,10 +47,19 @@ export const DEPENDENCY_SPECS: Record<
     // SVN workspace mode.
     minVersion: '1.12.13',
     note: 'SVN 单节点评审需要 open-code-review-svn >= 1.12.13',
+    officialUrl: 'https://www.npmjs.com/package/@smallfishworld/open-code-review-svn',
   },
   // ocr's SVN workspace mode runs `svn info --show-item`, which needs 1.9+.
-  svn: { conditional: true, minVersion: '1.9', note: 'ocr 的 SVN 工作副本模式需要 SVN >= 1.9' },
-  git: { conditional: true },
+  svn: {
+    conditional: true,
+    minVersion: '1.9',
+    note: 'ocr 的 SVN 工作副本模式需要 SVN >= 1.9',
+    officialUrl: 'https://subversion.apache.org/packages.html',
+  },
+  git: {
+    conditional: true,
+    officialUrl: 'https://git-scm.com/downloads',
+  },
 };
 
 /** Extract the first `x.y[.z]` from a version line. */
@@ -180,11 +191,12 @@ export async function checkDependencies(): Promise<DependencyReport> {
       probeDependency(command, spec.conditional, 10_000, spec.minVersion)
     )
   );
-  // Attach the spec's note so the console can explain version requirements.
+  // Attach the spec's note & official URL so the console can explain requirements and repair paths.
   for (const r of results) {
     const spec = DEPENDENCY_SPECS[r.command];
     if (spec?.minVersion) r.minVersion = spec.minVersion;
     if (spec?.note) r.note = spec.note;
+    if (spec?.officialUrl) r.officialUrl = spec.officialUrl;
   }
   return {
     results,

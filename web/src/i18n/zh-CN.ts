@@ -52,10 +52,10 @@ export const zhCN = {
   // Auth & Login
   'auth.redirecting': '未登录，正在跳转…',
   'login.pageTitle': '登录',
-  'login.promptRequired': '请输入管理员口令登录控制台',
-  'login.promptInitial': '当前未设置管理员口令（首次使用请登录后设置）',
+  'login.promptRequired': '请输入用户名和密码登录控制台',
+  'login.promptInitial': '请输入用户名和密码登录控制台',
   'login.username': '用户名',
-  'login.password': '口令',
+  'login.password': '密码',
   'login.submit': '登录',
   'login.submitting': '登录中…',
 
@@ -460,11 +460,11 @@ export const zhCN = {
   'notifications.addEmail': '新增邮件渠道',
   'notifications.addChat': '新增机器人渠道',
   'notifications.trigger.title': '触发规则',
-  'notifications.trigger.subtitle': '决定评审任务在何种结束状态下推送通知',
+  'notifications.trigger.subtitle': '评审成功通知上库开发人员；评审失败（全部重试耗尽后）仅通知管理员排查原因',
   'notifications.trigger.legend': '通知触发规则',
-  'notifications.trigger.all': '全部完成（成功与失败都通知）',
-  'notifications.trigger.failed_only': '仅失败',
-  'notifications.trigger.success_only': '仅成功',
+  'notifications.trigger.all': '成功通知开发，失败通知管理员',
+  'notifications.trigger.failed_only': '仅评审失败通知管理员',
+  'notifications.trigger.success_only': '仅评审成功通知开发人员',
   'notifications.form.createTitle': '新增渠道',
   'notifications.form.editTitle': '编辑渠道',
   'notifications.type.email': '邮件',
@@ -539,7 +539,7 @@ export const zhCN = {
 
   // SettingsPage
   'settings.pageTitle': '系统设置',
-  'settings.subtitle': '检查外部命令行运行依赖环境并维护管理员安全口令',
+  'settings.subtitle': '切换界面语言并检查、修复外部命令行运行依赖环境',
   'settings.deps.title': '依赖状态',
   'settings.deps.recheck': '重新检测',
   'settings.deps.checking': '检测中…',
@@ -554,12 +554,12 @@ export const zhCN = {
   'settings.deps.minVersion': '，要求 ≥ {version}',
   'settings.deps.toastOk': '依赖检测通过',
   'settings.deps.toastFail': '依赖检测完成，存在不可用项',
-  'settings.password.title': '管理员口令',
-  'settings.password.current': '当前口令',
-  'settings.password.next': '新口令',
-  'settings.password.hint': '至少 6 位。当前版本仅支持管理员口令登录，统一登录（OA / LDAP）为预留扩展点。',
-  'settings.password.submit': '更新口令',
-  'settings.password.toastUpdated': '管理员口令已更新',
+  'settings.password.title': '账号密码',
+  'settings.password.current': '当前密码',
+  'settings.password.next': '新密码',
+  'settings.password.hint': '至少 8 位，需同时包含字母和数字。',
+  'settings.password.submit': '更新密码',
+  'settings.password.toastUpdated': '密码已更新',
 } as const;
 
 export type MessageKey = keyof typeof zhCN;

@@ -358,6 +358,38 @@ describe('TaskQueue lifecycle', () => {
     expect(q.list({}).total).toBe(2);
   });
 
+  it('auto-retries failed review up to configured count and only emits completed once exhausted', async () => {
+    db.prepare(
+      "INSERT INTO setting (key, value) VALUES ('review_auto_retries', '2') ON CONFLICT(key) DO UPDATE SET value = '2'"
+    ).run();
+    const repoId = seedRepo(db);
+    let attempts = 0;
+    const completedEvents: string[] = [];
+    q = new TaskQueue(db, async () => {
+      attempts++;
+      return { exitCode: 1, error: `attempt ${attempts} failed` };
+    }, 1);
+    q.on('completed', (e) => completedEvents.push(e.task.status));
+
+    const t = q.enqueue(repoId, 'r-fail', 'manual', 'dev-a');
+    await q.idle();
+    expect(attempts).toBe(3); // 1 initial + 2 retries
+    expect(completedEvents).toEqual(['failed']); // emitted only once at the end
+    expect(q.get(t.id).error).toBe('attempt 3 failed');
+
+    // Also succeeds on retry if a later attempt passes
+    let attempts2 = 0;
+    const q2 = new TaskQueue(db, async () => {
+      attempts2++;
+      return attempts2 < 2 ? { exitCode: 1, error: 'transient' } : { exitCode: 0 };
+    }, 1);
+    const t2 = q2.enqueue(repoId, 'r-flaky', 'manual', 'dev-a');
+    await q2.idle();
+    expect(attempts2).toBe(2);
+    expect(q2.get(t2.id).status).toBe('succeeded');
+    q2.stop();
+  });
+
   it('dedupes identical (repo, node, trigger) enqueue', async () => {    q = new TaskQueue(db, fakeExecutor(5));
     const repoId = seedRepo(db);
     const t1 = q.enqueue(repoId, 'r42', 'auto');

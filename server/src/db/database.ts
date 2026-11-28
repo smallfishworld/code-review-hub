@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 export type RepoType = 'svn' | 'git';
 
-export const SCHEMA_VERSION = 15;
+export const SCHEMA_VERSION = 16;
 
 /**
  * Ordered, append-only list of migrations. Each entry runs once, tracked in
@@ -418,6 +418,126 @@ const MIGRATIONS: { version: number; name: string; up: (db: Database.Database) =
           rotated_at TEXT
         );
       `);
+    },
+  },
+  {
+    version: 16,
+    name: 'rbac-users-and-feedback-audit',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE role (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL UNIQUE,
+          description TEXT NOT NULL DEFAULT '',
+          permissions TEXT NOT NULL DEFAULT '[]',
+          builtin INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        );
+
+        CREATE TABLE user (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+          display_name TEXT NOT NULL,
+          email TEXT,
+          password_hash TEXT NOT NULL,
+          role_id INTEGER REFERENCES role(id) ON DELETE RESTRICT,
+          is_super_admin INTEGER NOT NULL DEFAULT 0,
+          status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','disabled')),
+          must_change_password INTEGER NOT NULL DEFAULT 0,
+          failed_logins INTEGER NOT NULL DEFAULT 0,
+          locked_until TEXT,
+          last_login_at TEXT,
+          created_by INTEGER REFERENCES user(id) ON DELETE SET NULL,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        );
+
+        CREATE TABLE auth_session (
+          token_hash TEXT PRIMARY KEY,
+          user_id INTEGER NOT NULL REFERENCES user(id) ON DELETE CASCADE,
+          expires_at TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          last_seen_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          ip TEXT,
+          user_agent TEXT
+        );
+        CREATE INDEX idx_auth_session_user ON auth_session(user_id);
+
+        CREATE TABLE registration_request (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          username TEXT NOT NULL COLLATE NOCASE,
+          display_name TEXT NOT NULL,
+          email TEXT,
+          reason TEXT NOT NULL DEFAULT '',
+          password_hash TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
+          role_id INTEGER REFERENCES role(id) ON DELETE SET NULL,
+          reviewed_by INTEGER REFERENCES user(id) ON DELETE SET NULL,
+          reviewed_at TEXT,
+          reject_reason TEXT,
+          ip TEXT,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        );
+        CREATE INDEX idx_reg_req_status ON registration_request(status, id DESC);
+        CREATE INDEX idx_reg_req_username ON registration_request(username);
+
+        CREATE TABLE audit_log (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER REFERENCES user(id) ON DELETE SET NULL,
+          username TEXT NOT NULL,
+          action TEXT NOT NULL,
+          target TEXT,
+          detail TEXT,
+          ip TEXT,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        );
+        CREATE INDEX idx_audit_log_created ON audit_log(id DESC);
+
+        INSERT OR IGNORE INTO setting (key, value) VALUES ('registration_enabled', '1');
+
+        ALTER TABLE review_feedback ADD COLUMN user_id INTEGER REFERENCES user(id) ON DELETE SET NULL;
+        ALTER TABLE review_feedback ADD COLUMN operator_name TEXT;
+        ALTER TABLE review_feedback ADD COLUMN client_ip TEXT;
+        ALTER TABLE review_feedback ADD COLUMN client_info TEXT;
+      `);
+
+      const allPerms = [
+        'repo:edit',
+        'monitor:edit',
+        'review:trigger',
+        'feedback:write',
+        'memory:edit',
+        'provider:edit',
+        'engine:edit',
+        'mcp:edit',
+        'notification:edit',
+        'log:manage',
+        'user:manage',
+      ];
+      const insertRole = db.prepare(
+        `INSERT INTO role (name, description, permissions, builtin) VALUES (?, ?, ?, 1)`
+      );
+      insertRole.run(
+        '超级管理员',
+        '拥有系统全部权限，可管理账号、角色与系统配置',
+        JSON.stringify(allPerms)
+      );
+      insertRole.run(
+        '服务管理员',
+        '负责 AI 模型、评审引擎、MCP 服务、通知渠道与运行日志管理',
+        JSON.stringify(['provider:edit', 'engine:edit', 'mcp:edit', 'notification:edit', 'log:manage'])
+      );
+      insertRole.run(
+        '软件项目负责人',
+        '负责代码库配置、监控规则、手动触发评审、项目记忆与缺陷反馈管理',
+        JSON.stringify(['repo:edit', 'monitor:edit', 'review:trigger', 'feedback:write', 'memory:edit'])
+      );
+      insertRole.run(
+        '开发人员',
+        '查看代码库与评审报告，支持手动触发评审与提交缺陷反馈',
+        JSON.stringify(['review:trigger', 'feedback:write'])
+      );
     },
   },
 ];

@@ -2,6 +2,7 @@ import { useId, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api, type MemoryEntry, type MemoryList } from '../api/client';
 import { errorText, useApi, usePageTitle } from '../api/hooks';
+import { usePermission } from '../auth/AuthContext';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useFlash } from '../components/Toast';
 import { useI18n, type MessageKey } from '../i18n';
@@ -35,6 +36,7 @@ export function RepoMemoryPage() {
   const { t } = useI18n();
   const { id } = useParams<{ id: string }>();
   const repoId = Number(id);
+  const canEdit = usePermission('memory:edit');
   usePageTitle(t('memory.pageTitle'));
   const memory = useApi(() => api.get<MemoryList>(`/api/repos/${repoId}/memory?status=all`));
   const preview = useApi(() =>
@@ -158,25 +160,28 @@ export function RepoMemoryPage() {
           <h1>{t('memory.heading', { id: repoId })}</h1>
           <p className="page-subtitle">{t('memory.subtitle', { id: repoId })}</p>
         </div>
-        <div className="row-actions">
-          <button type="button" className="secondary" onClick={() => void reloadMarkdown()}>
-            {t('memory.reloadMarkdown')}
-          </button>
-          <button
-            type="button"
-            className="primary"
-            onClick={() => void generateProfile()}
-            disabled={profileBusy}
-          >
-            {profileBusy ? t('memory.generatingProfile') : t('memory.generateProfile')}
-          </button>
-        </div>
+        {canEdit && (
+          <div className="row-actions">
+            <button type="button" className="secondary" onClick={() => void reloadMarkdown()}>
+              {t('memory.reloadMarkdown')}
+            </button>
+            <button
+              type="button"
+              className="primary"
+              onClick={() => void generateProfile()}
+              disabled={profileBusy}
+            >
+              {profileBusy ? t('memory.generatingProfile') : t('memory.generateProfile')}
+            </button>
+          </div>
+        )}
       </div>
       {memory.data && !memory.data.ftsAvailable && (
         <div className="alert info">{t('memory.ftsFallback')}</div>
       )}
 
-      <div className="split providers-split">
+      <div className={canEdit ? 'split providers-split' : 'stack'}>
+        {canEdit && (
         <section className="card" aria-labelledby="memory-form-title">
           <h2 id="memory-form-title">
             {editingId === null ? t('memory.form.createTitle') : t('memory.form.editTitle')}
@@ -259,6 +264,7 @@ export function RepoMemoryPage() {
             </div>
           </form>
         </section>
+        )}
 
         <div className="grow stack">
           <section className="card" aria-labelledby="memory-list-title">
@@ -309,36 +315,40 @@ export function RepoMemoryPage() {
                           </span>
                         </td>
                         <td className="actions-cell">
-                          <div className="row-actions">
-                            <button type="button" className="link" onClick={() => edit(m)}>
-                              {t('common.edit')}
-                              <span className="visually-hidden">
-                                {t('memory.list.srMemory', { title: m.title })}
-                              </span>
-                            </button>
-                            <button
-                              type="button"
-                              className="link"
-                              onClick={() => void toggleStatus(m)}
-                            >
-                              {m.status === 'active'
-                                ? t('common.disable')
-                                : t('memory.list.restore')}
-                              <span className="visually-hidden">
-                                {t('memory.list.srMemory', { title: m.title })}
-                              </span>
-                            </button>
-                            <button
-                              type="button"
-                              className="link danger"
-                              onClick={() => void remove(m)}
-                            >
-                              {t('common.delete')}
-                              <span className="visually-hidden">
-                                {t('memory.list.srMemory', { title: m.title })}
-                              </span>
-                            </button>
-                          </div>
+                          {canEdit ? (
+                            <div className="row-actions">
+                              <button type="button" className="link" onClick={() => edit(m)}>
+                                {t('common.edit')}
+                                <span className="visually-hidden">
+                                  {t('memory.list.srMemory', { title: m.title })}
+                                </span>
+                              </button>
+                              <button
+                                type="button"
+                                className="link"
+                                onClick={() => void toggleStatus(m)}
+                              >
+                                {m.status === 'active'
+                                  ? t('common.disable')
+                                  : t('memory.list.restore')}
+                                <span className="visually-hidden">
+                                  {t('memory.list.srMemory', { title: m.title })}
+                                </span>
+                              </button>
+                              <button
+                                type="button"
+                                className="link danger"
+                                onClick={() => void remove(m)}
+                              >
+                                {t('common.delete')}
+                                <span className="visually-hidden">
+                                  {t('memory.list.srMemory', { title: m.title })}
+                                </span>
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="small muted">—</span>
+                          )}
                         </td>
                       </tr>
                     ))}

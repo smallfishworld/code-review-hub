@@ -12,8 +12,10 @@ import {
   type TaskMemoryAudit,
 } from '../api/client';
 import { errorText, useApi, usePageTitle } from '../api/hooks';
+import { usePermission } from '../auth/AuthContext';
 import { useFlash } from '../components/Toast';
 import { useI18n, type MessageKey } from '../i18n';
+import { copyText } from '../utils/clipboard';
 
 const STATUS_KEYS: Record<string, MessageKey> = {
   queued: 'tasks.status.queued',
@@ -77,6 +79,7 @@ function RetryTaskButton({ taskId, className }: { taskId: number; className: str
 export function TasksPage() {
   const { t, formatTime } = useI18n();
   usePageTitle(t('tasks.pageTitle'));
+  const canTrigger = usePermission('review:trigger');
   const [repoId, setRepoId] = useState('');
   const [repoType, setRepoType] = useState('');
   const [status, setStatus] = useState('');
@@ -256,7 +259,7 @@ export function TasksPage() {
                       </td>
                       <td className="small">{formatTime(task.createdAt)}</td>
                       <td className="actions-cell">
-                        {task.status === 'failed' && (
+                        {canTrigger && task.status === 'failed' && (
                           <RetryTaskButton taskId={task.id} className="link" />
                         )}
                       </td>
@@ -281,6 +284,8 @@ export function TaskDetailPage() {
 function TaskDetail({ taskId }: { taskId: number }) {
   const { t, formatTime } = useI18n();
   usePageTitle(t('tasks.detail.pageTitle', { id: taskId }));
+  const canTrigger = usePermission('review:trigger');
+  const canFeedback = usePermission('feedback:write');
   const task = useApi(() => api.get<Task>(`/api/tasks/${taskId}`), [taskId]);
   const report = useApi(
     () => api.get<ReportDetail>(`/api/tasks/${taskId}/report`).catch(() => null),
@@ -450,12 +455,12 @@ function TaskDetail({ taskId }: { taskId: number }) {
           <button type="button" className="secondary" onClick={() => void refresh()}>
             {t('common.refresh')}
           </button>
-          {active && (
+          {canTrigger && active && (
             <button type="button" className="danger" onClick={cancel} disabled={busy}>
               {t('tasks.detail.cancel')}
             </button>
           )}
-          {status === 'failed' && <RetryTaskButton taskId={taskId} className="secondary" />}
+          {canTrigger && status === 'failed' && <RetryTaskButton taskId={taskId} className="secondary" />}
         </div>
       </div>
 
@@ -537,24 +542,34 @@ function TaskDetail({ taskId }: { taskId: number }) {
                 <button
                   type="button"
                   className="secondary"
-                  onClick={() => void navigator.clipboard?.writeText(share.data!.url)}
+                  onClick={() =>
+                    void copyText(share.data!.url).then((ok) =>
+                      ok ? flash.ok('已复制分享链接') : flash.fail('复制失败，请手动选中复制')
+                    )
+                  }
                 >
                   {t('tasks.detail.shareCopy')}
                 </button>
-                <button type="button" className="secondary" onClick={() => void rotateShare()} disabled={shareBusy}>
-                  {t('tasks.detail.shareRotate')}
-                </button>
-                <button type="button" className="danger" onClick={() => void revokeShare()} disabled={shareBusy}>
-                  {t('tasks.detail.shareRevoke')}
-                </button>
+                {canFeedback && (
+                  <>
+                    <button type="button" className="secondary" onClick={() => void rotateShare()} disabled={shareBusy}>
+                      {t('tasks.detail.shareRotate')}
+                    </button>
+                    <button type="button" className="danger" onClick={() => void revokeShare()} disabled={shareBusy}>
+                      {t('tasks.detail.shareRevoke')}
+                    </button>
+                  </>
+                )}
               </div>
             </div>
-          ) : (
+          ) : canFeedback ? (
             <div className="actions">
               <button type="button" className="secondary" onClick={() => void createShare()} disabled={shareBusy}>
                 {t('tasks.detail.shareCreate')}
               </button>
             </div>
+          ) : (
+            <p className="small muted">尚未生成分享链接。</p>
           )}
         </section>
       )}
@@ -633,11 +648,29 @@ function TaskDetail({ taskId }: { taskId: number }) {
                             {t('tasks.detail.wontFixReason', { note: issue.feedback.note })}
                           </div>
                         )}
+                        {issue.feedback?.verdict === 'false_positive' && issue.feedback.note && (
+                          <div className="small muted">误报原因：{issue.feedback.note}</div>
+                        )}
+                        {issue.feedback &&
+                          (issue.feedback.operatorName ||
+                            issue.feedback.clientIp ||
+                            issue.feedback.clientInfo) && (
+                            <div className="small muted share-feedback-meta">
+                              操作人：
+                              {[
+                                issue.feedback.operatorName,
+                                issue.feedback.clientIp ? `IP ${issue.feedback.clientIp}` : null,
+                                issue.feedback.clientInfo,
+                              ]
+                                .filter(Boolean)
+                                .join(' · ')}
+                            </div>
+                          )}
                       </td>
                       <td className="actions-cell">
                         {issue.feedback ? (
                           <span className="tag">{t(FEEDBACK_KEYS[issue.feedback.verdict])}</span>
-                        ) : (
+                        ) : canFeedback ? (
                           <div className="row-actions">
                             <button
                               type="button"
@@ -673,6 +706,8 @@ function TaskDetail({ taskId }: { taskId: number }) {
                               </span>
                             </button>
                           </div>
+                        ) : (
+                          <span className="small muted">—</span>
                         )}
                       </td>
                     </tr>

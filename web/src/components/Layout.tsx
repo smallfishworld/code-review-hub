@@ -1,11 +1,15 @@
 import type { ReactNode } from 'react';
-import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import type { Permission } from '../api/client';
 import { useAuth } from '../auth/AuthContext';
-import { LanguageSwitcher, useI18n, type MessageKey } from '../i18n';
+import { useI18n, type MessageKey } from '../i18n';
 
 interface NavItem {
   to: string;
-  labelKey: MessageKey;
+  labelKey?: MessageKey;
+  label?: string;
+  perm?: Permission;
+  badge?: number;
   icon: ReactNode;
 }
 
@@ -51,6 +55,7 @@ const NAV_GROUPS: NavGroup[] = [
       {
         to: '/trigger',
         labelKey: 'nav.trigger',
+        perm: 'review:trigger',
         icon: (
           <svg {...iconProps}>
             <path d="M6.5 4.8v10.4L15.2 10 6.5 4.8Z" />
@@ -75,6 +80,7 @@ const NAV_GROUPS: NavGroup[] = [
       {
         to: '/providers',
         labelKey: 'nav.providers',
+        perm: 'provider:edit',
         icon: (
           <svg {...iconProps}>
             <rect x="5.5" y="5.5" width="9" height="9" rx="1.8" />
@@ -85,6 +91,7 @@ const NAV_GROUPS: NavGroup[] = [
       {
         to: '/engines',
         labelKey: 'nav.engines',
+        perm: 'engine:edit',
         icon: (
           <svg {...iconProps}>
             <path d="M10 3.5 16.5 7 10 10.5 3.5 7 10 3.5Z" />
@@ -95,6 +102,7 @@ const NAV_GROUPS: NavGroup[] = [
       {
         to: '/mcp',
         labelKey: 'nav.mcp',
+        perm: 'mcp:edit',
         icon: (
           <svg {...iconProps}>
             <path d="M7.5 6.5v-3M12.5 6.5v-3M5.5 6.5h9v3a4.5 4.5 0 0 1-9 0v-3ZM10 14v3" />
@@ -109,6 +117,7 @@ const NAV_GROUPS: NavGroup[] = [
       {
         to: '/notifications',
         labelKey: 'nav.notifications',
+        perm: 'notification:edit',
         icon: (
           <svg {...iconProps}>
             <path d="M10 3.5a4.5 4.5 0 0 0-4.5 4.5v2.8l-1.5 2.2h12l-1.5-2.2V8A4.5 4.5 0 0 0 10 3.5Z" />
@@ -119,10 +128,24 @@ const NAV_GROUPS: NavGroup[] = [
       {
         to: '/logs',
         labelKey: 'nav.logs',
+        perm: 'log:manage',
         icon: (
           <svg {...iconProps}>
             <rect x="3.5" y="4" width="13" height="12" rx="2" />
             <path d="m6.8 8 2.2 2-2.2 2M10.5 12h2.8" />
+          </svg>
+        ),
+      },
+      {
+        to: '/admin/users',
+        label: '用户与权限',
+        perm: 'user:manage',
+        icon: (
+          <svg {...iconProps}>
+            <circle cx="8" cy="7" r="2.5" />
+            <path d="M3.5 15.5a4.5 4.5 0 0 1 9 0" />
+            <circle cx="14.2" cy="8" r="1.8" />
+            <path d="M13 15.5a3.2 3.2 0 0 1 3.8-2.5" />
           </svg>
         ),
       },
@@ -141,7 +164,7 @@ const NAV_GROUPS: NavGroup[] = [
 ];
 
 export function Layout() {
-  const { status, logout } = useAuth();
+  const { status, logout, can } = useAuth();
   const { t } = useI18n();
   const navigate = useNavigate();
   const location = useLocation();
@@ -153,6 +176,7 @@ export function Layout() {
 
   const userName = status?.displayName ?? status?.username ?? t('common.notLoggedIn');
   const userInitial = userName.slice(0, 1).toUpperCase();
+  const pendingRegs = status?.pendingRegistrations ?? 0;
 
   return (
     <div className="app-shell">
@@ -169,38 +193,42 @@ export function Layout() {
           </div>
         </div>
         <nav aria-label={t('nav.mainAria')} className="nav-groups">
-          {NAV_GROUPS.map((group) => (
-            <div key={group.titleKey} className="nav-group">
-              <div className="nav-group-label">{t(group.titleKey)}</div>
-              <div className="nav-group-items">
-                {group.items.map((item) => (
-                  <NavLink
-                    key={item.to}
-                    to={item.to}
-                    className={({ isActive }) => (isActive ? 'nav-item active' : 'nav-item')}
-                    aria-current={location.pathname === item.to ? 'page' : undefined}
-                  >
-                    {item.icon}
-                    <span>{t(item.labelKey)}</span>
-                  </NavLink>
-                ))}
+          {NAV_GROUPS.map((group) => {
+            const visibleItems = group.items.filter((item) => !item.perm || can(item.perm));
+            if (visibleItems.length === 0) return null;
+            return (
+              <div key={group.titleKey} className="nav-group">
+                <div className="nav-group-label">{t(group.titleKey)}</div>
+                <div className="nav-group-items">
+                  {visibleItems.map((item) => (
+                    <NavLink
+                      key={item.to}
+                      to={item.to}
+                      className={({ isActive }) => (isActive ? 'nav-item active' : 'nav-item')}
+                      aria-current={location.pathname === item.to ? 'page' : undefined}
+                    >
+                      {item.icon}
+                      <span>{item.labelKey ? t(item.labelKey) : item.label}</span>
+                      {item.to === '/admin/users' && pendingRegs > 0 && (
+                        <span className="nav-badge" aria-label={`${pendingRegs} 条待审批`}>
+                          {pendingRegs}
+                        </span>
+                      )}
+                    </NavLink>
+                  ))}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </nav>
         <div className="sidebar-bottom">
-          <div className="sidebar-lang">
-            <LanguageSwitcher />
-          </div>
           <div className="sidebar-footer">
-            <div className="user-badge">
+            <Link to="/account" className="user-badge" title="我的账号">
               <span className="user-avatar" aria-hidden="true">
                 {userInitial}
               </span>
-              <span className="user-name" title={userName}>
-                {userName}
-              </span>
-            </div>
+              <span className="user-name">{userName}</span>
+            </Link>
             <button type="button" className="link small" onClick={doLogout}>
               {t('common.logout')}
             </button>

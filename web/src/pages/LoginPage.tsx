@@ -1,27 +1,52 @@
-import { useId, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useId, useState } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { errorText, usePageTitle } from '../api/hooks';
+import { PasswordInput } from '../components/PasswordInput';
 import { LanguageSwitcher, useI18n } from '../i18n';
+
+function safeReturnPath(state: unknown): string {
+  const raw = (state as { from?: unknown } | null)?.from;
+  if (typeof raw === 'string' && raw.startsWith('/') && !raw.startsWith('//') && raw !== '/login') {
+    return raw;
+  }
+  return '/repos';
+}
 
 export function LoginPage() {
   const { t } = useI18n();
   usePageTitle(t('login.pageTitle'));
   const { status, login } = useAuth();
   const navigate = useNavigate();
-  const [username, setUsername] = useState('admin');
+  const location = useLocation();
+  const returnTo = safeReturnPath(location.state);
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const ids = { username: useId(), password: useId(), error: useId() };
+
+  useEffect(() => {
+    if (status?.authenticated) {
+      if (status.user?.mustChangePassword) {
+        navigate('/account', { replace: true, state: { from: returnTo } });
+      } else {
+        navigate(returnTo, { replace: true });
+      }
+    }
+  }, [status, navigate, returnTo]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
     setError(null);
     try {
-      await login(username, password);
-      navigate('/repos', { replace: true });
+      const user = await login(username.trim(), password);
+      if (user.mustChangePassword) {
+        navigate('/account', { replace: true, state: { from: returnTo } });
+      } else {
+        navigate(returnTo, { replace: true });
+      }
     } catch (err) {
       setError(errorText(err));
     } finally {
@@ -37,9 +62,7 @@ export function LoginPage() {
           <img className="brand-mark" src="/logo.png" alt="" aria-hidden="true" width={44} height={44} />
           <div>
             <h1 id="login-title">{t('app.name')}</h1>
-            <p className="muted small">
-              {status?.loginRequired ? t('login.promptRequired') : t('login.promptInitial')}
-            </p>
+            <p className="muted small">{t('login.promptRequired')}</p>
           </div>
         </div>
         <label htmlFor={ids.username}>
@@ -49,19 +72,20 @@ export function LoginPage() {
             value={username}
             onChange={(e) => setUsername(e.target.value)}
             autoComplete="username"
+            required
+            autoFocus
           />
         </label>
         <label htmlFor={ids.password}>
           {t('login.password')}
-          <input
+          <PasswordInput
             id={ids.password}
-            type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             autoComplete="current-password"
             aria-describedby={error ? ids.error : undefined}
             aria-invalid={error ? true : undefined}
-            autoFocus
+            required
           />
         </label>
         {error && (
@@ -72,6 +96,11 @@ export function LoginPage() {
         <button className="primary" type="submit" disabled={busy}>
           {busy ? t('login.submitting') : t('login.submit')}
         </button>
+        {status?.registrationEnabled && (
+          <div className="login-footer-link">
+            <Link to="/register">还没有账号？申请注册</Link>
+          </div>
+        )}
       </form>
     </div>
   );

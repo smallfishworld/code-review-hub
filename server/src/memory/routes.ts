@@ -11,6 +11,7 @@ import { injectionAuditForTask } from '../mcp/injector.js';
 import { workCopyDir } from '../tasks/ocrRunner.js';
 import { resolveRepositoryProvider, resolveProvider } from '../providers/ocrProviderConfig.js';
 import type { CredentialService } from '../crypto/credentialService.js';
+import { clientIpOf } from '../auth/authRoutes.js';
 
 /**
  * Memory + feedback REST API:
@@ -183,7 +184,16 @@ export function buildMemoryRoutes(
         return reply.code(400).send({ message: 'verdict 无效' });
       }
       try {
-        return processFeedback(db, store, Number(id), body);
+        const user = req.authUser;
+        return processFeedback(db, store, Number(id), {
+          ...body,
+          operator: {
+            userId: user && user.id > 0 ? user.id : null,
+            operatorName: user ? `${user.displayName} (${user.username})` : null,
+            clientIp: clientIpOf(req),
+            clientInfo: null,
+          },
+        });
       } catch (err) {
         return handleError(err, reply);
       }

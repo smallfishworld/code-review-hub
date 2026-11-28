@@ -1,5 +1,6 @@
 import Fastify from 'fastify';
 import { checkDependencies, formatReport } from './deps/detector.js';
+import { repairDependency, RepairError } from './deps/repair.js';
 import { openDatabase } from './db/database.js';
 import { SecretStore } from './crypto/secrets.js';
 import { CredentialService } from './crypto/credentialService.js';
@@ -41,6 +42,7 @@ const authRequired = process.env.AUTH_REQUIRED !== 'false';
 const logs = new LogService(5000, dataDir);
 
 const app = Fastify({
+  trustProxy: process.env.TRUST_PROXY === 'true',
   logger: {
     level: process.env.LOG_LEVEL ?? 'info',
     // Mirror pino output into the runtime log so the web console sees HTTP
@@ -78,7 +80,7 @@ async function main() {
   }
   // Startup dependency check: svn/git are conditional (per repo type),
   // ocr is required for reviews.
-  const depReport = await checkDependencies();
+  let depReport = await checkDependencies();
   app.log.info(formatReport(depReport));
   logs.info('server', `服务启动 (data: ${dataDir})`);
 
@@ -94,7 +96,7 @@ async function main() {
   const engineExecutor = new EngineExecutor(db, credentials, { dataDir, logs });
   const reports = new ReportService(db);
   reports.recoverLegacyIndexes(dataDir);
-  const queue = new TaskQueue(db, engineExecutor.execute, maxReviewConcurrency, logs, reports);
+  const queue = new TaskQueue(db, engineExecutor.execute, maxReviewConcurrency, logs, reports, 3000);
   const events = new TaskEventHub(db, queue, reports, dataDir, credentials);
   events.start();
 
@@ -103,11 +105,58 @@ async function main() {
 
   // --- HTTP routes ---------------------------------------------------------
   // Auth guard first: it hooks onRequest for /api/*.
-  buildAuthRoutes(db, { loginRequired: authRequired }).register(app);
+  let notifyRegistrationFn:
+    | ((r: { username: string; displayName: string; email: string | null; reason: string }) => void)
+    | null = null;
+  const authRoutes = buildAuthRoutes(db, {
+    loginRequired: authRequired,
+    dataDir,
+    initialAdminPassword: process.env.INIT_ADMIN_PASSWORD,
+    onRegistrationSubmitted: (req) => {
+      notifyRegistrationFn?.(req);
+    },
+  });
+  authRoutes.register(app);
+
+  if (authRequired && authRoutes.initialAdmin) {
+    const { username, password, filePath } = authRoutes.initialAdmin;
+    const loginUrl = `${(process.env.PUBLIC_BASE_URL ?? browserUrl(host, port)).replace(/\/+$/, '')}/login`;
+    logs.info(
+      'server',
+      `首次启动已自动创建超级管理员账号：用户名 ${username}，初始密码 ${password}${filePath ? `（已保存至 ${filePath}，修改密码后自动删除）` : ''}`
+    );
+    console.log('\n------------------------------------------------------------');
+    console.log('  首次启动已自动创建超级管理员账号，请登录并尽快修改密码：');
+    console.log(`    登录地址：${loginUrl}`);
+    console.log(`    用户名：  ${username}`);
+    console.log(`    初始密码：${password}`);
+    if (filePath) {
+      console.log(`    密码文件：${filePath}（修改密码后自动删除）`);
+    }
+    console.log('------------------------------------------------------------\n');
+  }
 
   app.get('/api/health', async () => ({ status: 'ok' }));
   app.get('/api/deps', async () => depReport);
-  app.post('/api/deps/check', async () => checkDependencies());
+  app.post('/api/deps/check', async () => {
+    depReport = await checkDependencies();
+    return depReport;
+  });
+  app.post('/api/deps/:command/repair', async (req, reply) => {
+    const { command } = req.params as { command: string };
+    try {
+      const result = await repairDependency(command, {
+        onLog: (msg) => logs.info('deps', msg),
+      });
+      depReport = result.report;
+      return result;
+    } catch (err) {
+      if (err instanceof RepairError) {
+        return reply.code(err.statusCode).send({ message: err.message });
+      }
+      throw err;
+    }
+  });
 
   buildRepoRoutes(db, credentials, {
     onRepoChange: (repoId) => {
@@ -143,6 +192,9 @@ async function main() {
   });
   notifications.register(app);
   notifications.sender?.start(events);
+  notifyRegistrationFn = (req) => {
+    void notifications.sender?.notifyRegistration(req);
+  };
 
   // --- static SPA (production build) ---------------------------------------
   const webDist = findWebDist();

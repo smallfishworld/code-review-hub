@@ -105,6 +105,9 @@ export interface CompletedReviewReport extends NormalizedReport {
 interface IssueFeedback {
   verdict: Exclude<FeedbackVerdict, 'valid'>;
   note: string | null;
+  operatorName?: string | null;
+  clientIp?: string | null;
+  clientInfo?: string | null;
 }
 
 export interface StoredIssue {
@@ -389,10 +392,27 @@ export class ReportService {
       raw = null;
     }
     const feedbackRows = this.db.prepare(
-      "SELECT issue_id, verdict, note FROM review_feedback WHERE task_id = ? AND verdict != 'valid' ORDER BY id"
-    ).all(taskId) as ({ issue_id: number } & IssueFeedback)[];
+      `SELECT issue_id, verdict, note, operator_name, client_ip, client_info
+       FROM review_feedback WHERE task_id = ? AND verdict != 'valid' ORDER BY id`
+    ).all(taskId) as {
+      issue_id: number;
+      verdict: Exclude<FeedbackVerdict, 'valid'>;
+      note: string | null;
+      operator_name: string | null;
+      client_ip: string | null;
+      client_info: string | null;
+    }[];
     const feedbackByIssue = new Map(
-      feedbackRows.map(({ issue_id, verdict, note }) => [issue_id, { verdict, note }])
+      feedbackRows.map((f) => [
+        f.issue_id,
+        {
+          verdict: f.verdict,
+          note: f.note,
+          ...(f.operator_name ? { operatorName: f.operator_name } : {}),
+          ...(f.client_ip ? { clientIp: f.client_ip } : {}),
+          ...(f.client_info ? { clientInfo: f.client_info } : {}),
+        },
+      ])
     );
     const all = this.issues(taskId, { includeSuppressed: true }).map((issue) => {
       const feedback = feedbackByIssue.get(issue.id);

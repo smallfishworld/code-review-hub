@@ -100,6 +100,15 @@ function isHttpUrl(value: string): boolean {
   }
 }
 
+export interface FailurePolicy {
+  /** Number of automatic retries after a failed review (0..5). */
+  autoRetries: number;
+  /** Whether to alert admins once all retries are exhausted. */
+  notifyAdminsOnFailure: boolean;
+  /** Explicit admin recipients (usernames / emails / IM uids); empty = auto-resolve active super/service admins. */
+  adminRecipients: string[];
+}
+
 export class ChannelService {
   constructor(
     private readonly db: Database.Database,
@@ -471,5 +480,77 @@ export class ChannelService {
       },
       credentialId,
     };
+  }
+
+  getFailurePolicy(): FailurePolicy {
+    const getSetting = (key: string): string | undefined => {
+      const row = this.db.prepare('SELECT value FROM setting WHERE key = ?').get(key) as
+        | { value: string }
+        | undefined;
+      return row?.value;
+    };
+    const retriesRaw = Number(getSetting('review_auto_retries') ?? 0);
+    const autoRetries = Number.isFinite(retriesRaw)
+      ? Math.min(5, Math.max(0, Math.floor(retriesRaw)))
+      : 0;
+    const notifyAdminsOnFailure = getSetting('notify_admins_on_failure') !== '0';
+    let adminRecipients: string[] = [];
+    const rawList = getSetting('failure_admin_recipients');
+    if (rawList) {
+      try {
+        const parsed = JSON.parse(rawList) as unknown;
+        if (Array.isArray(parsed)) {
+          adminRecipients = parsed
+            .filter((x): x is string => typeof x === 'string')
+            .map((s) => s.trim())
+            .filter(Boolean);
+        }
+      } catch {
+        adminRecipients = [];
+      }
+    }
+    return { autoRetries, notifyAdminsOnFailure, adminRecipients };
+  }
+
+  setFailurePolicy(input: Partial<FailurePolicy>): FailurePolicy {
+    const current = this.getFailurePolicy();
+    let autoRetries = current.autoRetries;
+    if (input.autoRetries !== undefined) {
+      const n = Number(input.autoRetries);
+      if (!Number.isInteger(n) || n < 0 || n > 5) {
+        throw new ChannelError('失败自动重试次数必须为 0–5 之间的整数');
+      }
+      autoRetries = n;
+    }
+    const notifyAdminsOnFailure =
+      input.notifyAdminsOnFailure !== undefined
+        ? Boolean(input.notifyAdminsOnFailure)
+        : current.notifyAdminsOnFailure;
+    let adminRecipients = current.adminRecipients;
+    if (input.adminRecipients !== undefined) {
+      if (!Array.isArray(input.adminRecipients)) {
+        throw new ChannelError('管理员接收人列表必须是字符串数组');
+      }
+      adminRecipients = Array.from(
+        new Set(
+          input.adminRecipients
+            .filter((x): x is string => typeof x === 'string')
+            .map((s) => s.trim())
+            .filter(Boolean)
+        )
+      ).slice(0, 50);
+    }
+
+    const upsert = this.db.prepare(
+      `INSERT INTO setting (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+    );
+    const tx = this.db.transaction(() => {
+      upsert.run('review_auto_retries', String(autoRetries));
+      upsert.run('notify_admins_on_failure', notifyAdminsOnFailure ? '1' : '0');
+      upsert.run('failure_admin_recipients', JSON.stringify(adminRecipients));
+    });
+    tx();
+    return this.getFailurePolicy();
   }
 }

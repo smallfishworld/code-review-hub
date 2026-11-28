@@ -20,10 +20,18 @@ export class FeedbackError extends Error {
 
 export type FeedbackVerdict = 'false_positive' | 'fixed' | 'valid' | 'wont_fix';
 
+export interface FeedbackOperator {
+  userId?: number | null;
+  operatorName?: string | null;
+  clientIp?: string | null;
+  clientInfo?: string | null;
+}
+
 export interface FeedbackInput {
   issueId: number;
   verdict: FeedbackVerdict;
   note?: string;
+  operator?: FeedbackOperator;
 }
 
 export interface FeedbackOutcome {
@@ -173,12 +181,24 @@ function writeFeedback(
     action = 'created';
   }
 
+  const op = input.operator;
   const info = db
     .prepare(
-      `INSERT INTO review_feedback (task_id, issue_id, verdict, memory_id, note)
-       VALUES (?, ?, ?, ?, ?)`
+      `INSERT INTO review_feedback
+         (task_id, issue_id, verdict, memory_id, note, user_id, operator_name, client_ip, client_info)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(taskId, input.issueId, input.verdict, memoryId, input.note ?? null);
+    .run(
+      taskId,
+      input.issueId,
+      input.verdict,
+      memoryId,
+      input.note ?? null,
+      op?.userId && op.userId > 0 ? op.userId : null,
+      op?.operatorName?.trim().slice(0, 120) || null,
+      op?.clientIp?.trim().slice(0, 80) || null,
+      op?.clientInfo?.trim().slice(0, 300) || null
+    );
   return {
     feedbackId: Number(info.lastInsertRowid),
     memoryId,

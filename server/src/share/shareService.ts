@@ -83,19 +83,20 @@ export class ShareService {
     return row?.task_id;
   }
 
-  /** Public share view of a report: report + issues only, no raw JSON. */
+  /** Public share view of a report: task metadata + report/issues (no raw JSON). */
   sharedReport(token: string): {
     task: {
       id: number;
       node: string;
       status: string;
       author: string | null;
+      error: string | null;
       commitMessage: string | null;
       commitDate: string | null;
       createdAt: string;
     };
     repo: { name: string; url: string; type: string };
-    report: { summary: string | null; issueCount: number; parsedOk: boolean; createdAt: string };
+    report: { summary: string | null; issueCount: number; parsedOk: boolean; createdAt: string } | null;
     issues: {
       id: number;
       file: string | null;
@@ -105,55 +106,83 @@ export class ShareService {
       category: string | null;
       description: string;
       suggestion: string | null;
-      feedback?: { verdict: string; note: string | null };
+      feedback?: {
+        verdict: string;
+        note: string | null;
+        operatorName?: string | null;
+        clientIp?: string | null;
+        clientInfo?: string | null;
+      };
     }[];
   } | null {
     const taskId = this.taskIdFor(token);
     if (taskId === undefined) return null;
     const task = this.db
       .prepare(
-        'SELECT id, repo_id, node, status, author, commit_message, commit_date, created_at FROM task WHERE id = ?'
+        'SELECT id, repo_id, node, status, author, error, commit_message, commit_date, created_at FROM task WHERE id = ?'
       )
       .get(taskId) as
       | {
           id: number; repo_id: number; node: string; status: string; author: string | null;
-          commit_message: string | null; commit_date: string | null; created_at: string;
+          error: string | null; commit_message: string | null; commit_date: string | null; created_at: string;
         }
       | undefined;
+    if (!task) return null;
     const report = this.reports.get(taskId);
-    if (!task || !report) return null;
     const repo = this.db
       .prepare('SELECT name, url, type FROM repo WHERE id = ?')
       .get(task.repo_id) as { name: string; url: string; type: string } | undefined;
 
     // Existing verdicts so the share page can show what was already decided.
-    const feedbackRows = this.db
-      .prepare(
-        `SELECT issue_id, verdict, note FROM review_feedback
-         WHERE task_id = ? AND verdict != 'valid' ORDER BY id`
-      )
-      .all(taskId) as { issue_id: number; verdict: string; note: string | null }[];
+    const feedbackRows = report
+      ? (this.db
+          .prepare(
+            `SELECT issue_id, verdict, note, operator_name, client_ip, client_info
+             FROM review_feedback
+             WHERE task_id = ? AND verdict != 'valid' ORDER BY id`
+          )
+          .all(taskId) as {
+          issue_id: number;
+          verdict: string;
+          note: string | null;
+          operator_name: string | null;
+          client_ip: string | null;
+          client_info: string | null;
+        }[])
+      : [];
     const feedbackByIssue = new Map(
-      feedbackRows.map((f) => [f.issue_id, { verdict: f.verdict, note: f.note }])
+      feedbackRows.map((f) => [
+        f.issue_id,
+        {
+          verdict: f.verdict,
+          note: f.note,
+          ...(f.operator_name ? { operatorName: f.operator_name } : {}),
+          ...(f.client_ip ? { clientIp: f.client_ip } : {}),
+          ...(f.client_info ? { clientInfo: f.client_info } : {}),
+        },
+      ])
     );
 
-    const issues = (this.reports.issues(taskId) ?? []).map((i) => ({
-      id: i.id,
-      file: i.file,
-      line: i.line,
-      endLine: i.endLine,
-      severity: i.severity,
-      category: i.category,
-      description: i.description,
-      suggestion: i.suggestion,
-      ...(feedbackByIssue.has(i.id) ? { feedback: feedbackByIssue.get(i.id) } : {}),
-    }));
+    const issues = report
+      ? (this.reports.issues(taskId) ?? []).map((i) => ({
+          id: i.id,
+          file: i.file,
+          line: i.line,
+          endLine: i.endLine,
+          severity: i.severity,
+          category: i.category,
+          description: i.description,
+          suggestion: i.suggestion,
+          ...(feedbackByIssue.has(i.id) ? { feedback: feedbackByIssue.get(i.id) } : {}),
+        }))
+      : [];
     return {
       task: {
         id: task.id,
         node: task.node,
         status: task.status,
         author: task.author,
+        error: task.error,
         commitMessage: task.commit_message,
         commitDate: task.commit_date,
         createdAt: task.created_at,
@@ -163,12 +192,14 @@ export class ShareService {
         url: repo?.url ?? '',
         type: repo?.type ?? '',
       },
-      report: {
-        summary: report.summary,
-        issueCount: report.issueCount,
-        parsedOk: report.parsedOk,
-        createdAt: report.createdAt,
-      },
+      report: report
+        ? {
+            summary: report.summary,
+            issueCount: report.issueCount,
+            parsedOk: report.parsedOk,
+            createdAt: report.createdAt,
+          }
+        : null,
       issues,
     };
   }

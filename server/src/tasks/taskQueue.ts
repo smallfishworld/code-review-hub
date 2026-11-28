@@ -112,7 +112,9 @@ export class TaskQueue extends EventEmitter {
     private readonly maxConcurrentTasks = 2,
     /** Runtime log sink (web console); task lifecycle lands here. */
     private readonly logs?: LogService,
-    private readonly reports?: ReportService
+    private readonly reports?: ReportService,
+    /** Optional backoff between automatic retries (ms); defaults to 0 for tests. */
+    private readonly retryDelayMs = 0
   ) {
     super();
   }
@@ -409,38 +411,83 @@ export class TaskQueue extends EventEmitter {
         if (controller.signal.aborted) child.kill();
       };
 
-      let result: TaskExecutionResult;
-      try {
-        result = await this.executor({ ...task, workspaceSlot }, onSpawn, controller.signal);
-      } catch (err) {
-        result = { exitCode: -1, error: err instanceof Error ? err.message : String(err) };
-      }
+      const maxRetries = this.getAutoRetryCount();
+      let finalStatus: TaskStatus = 'failed';
+      let error: string | null = null;
+      let exitCode: number | null = null;
 
-      const cancelled = controller.signal.aborted;
-      let error = cancelled ? 'cancelled by user' : result.error ?? null;
-      let finalStatus: TaskStatus = cancelled
-        ? 'cancelled'
-        : result.exitCode === 0
-          ? 'succeeded'
-          : 'failed';
-      try {
-        if (finalStatus === 'succeeded' && this.reports) {
-          try {
-            if (!result.report) throw new Error('引擎未生成报告');
-            this.db.prepare('UPDATE task SET pending_report = ? WHERE id = ?')
-              .run(JSON.stringify(result.report), task.id);
-            this.commitReport(task.id, result.report);
-          } catch (err) {
-            finalStatus = 'failed';
-            error = this.reportError(err);
-            this.finish(task.id, finalStatus, error, result.exitCode);
+      for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        if (attempt > 0) {
+          if (controller.signal.aborted) break;
+          this.logs?.warn('task', `#${task.id} 评审失败，正在进行第 ${attempt}/${maxRetries} 次自动重试`);
+        }
+
+        let result: TaskExecutionResult;
+        try {
+          result = await this.executor({ ...task, workspaceSlot }, onSpawn, controller.signal);
+        } catch (err) {
+          result = { exitCode: -1, error: err instanceof Error ? err.message : String(err) };
+        }
+
+        if (controller.signal.aborted) {
+          finalStatus = 'cancelled';
+          error = 'cancelled by user';
+          exitCode = null;
+          break;
+        }
+
+        exitCode = result.exitCode;
+        error = result.error ?? null;
+        if (result.exitCode === 0) {
+          if (this.reports) {
+            try {
+              if (!result.report) throw new Error('引擎未生成报告');
+              this.db.prepare('UPDATE task SET pending_report = ? WHERE id = ?')
+                .run(JSON.stringify(result.report), task.id);
+              this.commitReport(task.id, result.report);
+              finalStatus = 'succeeded';
+              error = null;
+              break;
+            } catch (err) {
+              finalStatus = 'failed';
+              error = this.reportError(err);
+            }
+          } else {
+            finalStatus = 'succeeded';
+            error = null;
+            break;
           }
         } else {
-          this.finish(task.id, finalStatus, error, cancelled ? null : result.exitCode);
+          finalStatus = 'failed';
+        }
+
+        if (attempt < maxRetries) {
+          this.logs?.warn(
+            'task',
+            `#${task.id} 第 ${attempt + 1} 次尝试失败（${error ?? `exit=${exitCode}`}），准备重试`
+          );
+          if (this.retryDelayMs > 0) {
+            await sleepWithSignal(this.retryDelayMs, controller.signal);
+            if (controller.signal.aborted) {
+              finalStatus = 'cancelled';
+              error = 'cancelled by user';
+              exitCode = null;
+              break;
+            }
+          }
+        }
+      }
+
+      try {
+        if (finalStatus !== 'succeeded' || !this.reports) {
+          this.finish(task.id, finalStatus, error, finalStatus === 'cancelled' ? null : exitCode);
         }
         if (finalStatus === 'succeeded') this.logs?.info('task', `#${task.id} 评审完成`);
         else if (finalStatus === 'cancelled') this.logs?.info('task', `#${task.id} 已取消`);
-        else this.logs?.error('task', `#${task.id} 评审失败: ${error ?? '无错误详情'}`);
+        else {
+          const retryNote = maxRetries > 0 ? `（已自动重试 ${maxRetries} 次仍失败）` : '';
+          this.logs?.error('task', `#${task.id} 评审失败${retryNote}: ${error ?? '无错误详情'}`);
+        }
         const finalTask = this.get(task.id);
         this.emit('completed', { task: finalTask } satisfies TaskCompletedEvent);
       } catch {
@@ -454,6 +501,19 @@ export class TaskQueue extends EventEmitter {
       if (slots.size === 0) this.workspaceSlots.delete(task.repoId);
       this.kick();
       this.wakeIdleWaiters();
+    }
+  }
+
+  private getAutoRetryCount(): number {
+    try {
+      const row = this.db
+        .prepare("SELECT value FROM setting WHERE key = 'review_auto_retries'")
+        .get() as { value: string } | undefined;
+      const n = Number(row?.value ?? 0);
+      if (!Number.isFinite(n)) return 0;
+      return Math.min(5, Math.max(0, Math.floor(n)));
+    } catch {
+      return 0;
     }
   }
 
@@ -474,4 +534,19 @@ export class TaskQueue extends EventEmitter {
   private reportError(error: unknown): string {
     return `评审报告保存失败: ${error instanceof Error ? error.message : String(error)}`;
   }
+}
+
+function sleepWithSignal(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted || ms <= 0) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
 }

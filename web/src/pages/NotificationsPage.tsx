@@ -1,4 +1,4 @@
-import { Fragment, useId, useState } from 'react';
+import { Fragment, useId, useRef, useState } from 'react';
 import { api, type Channel, type NotificationLog } from '../api/client';
 import { errorText, useApi, usePageTitle } from '../api/hooks';
 import { useConfirm } from '../components/ConfirmDialog';
@@ -8,6 +8,12 @@ import { useI18n, type MessageKey } from '../i18n';
 const PLACEHOLDERS = ['{{repo}}', '{{node}}', '{{author}}', '{{status}}', '{{summary}}', '{{report_url}}'];
 
 type Trigger = 'all' | 'failed_only' | 'success_only';
+
+interface FailurePolicy {
+  autoRetries: number;
+  notifyAdminsOnFailure: boolean;
+  adminRecipients: string[];
+}
 
 interface EmailForm {
   name: string;
@@ -49,9 +55,45 @@ export function NotificationsPage() {
   usePageTitle(t('notifications.pageTitle'));
   const channels = useApi(() => api.get<Channel[]>('/api/notifications/channels'));
   const trigger = useApi(() => api.get<{ trigger: Trigger }>('/api/notifications/trigger'));
+  const failurePolicy = useApi(() => api.get<FailurePolicy>('/api/notifications/failure-policy'));
   const logs = useApi(() => api.get<NotificationLog[]>('/api/notifications/logs?limit=50'));
   const flash = useFlash();
   const confirm = useConfirm();
+  const [policyDraft, setPolicyDraft] = useState<{
+    autoRetries: number;
+    notifyAdminsOnFailure: boolean;
+    adminRecipientsText: string;
+  } | null>(null);
+  const [policyBusy, setPolicyBusy] = useState(false);
+
+  const effectivePolicy = policyDraft ?? {
+    autoRetries: failurePolicy.data?.autoRetries ?? 0,
+    notifyAdminsOnFailure: failurePolicy.data?.notifyAdminsOnFailure ?? true,
+    adminRecipientsText: (failurePolicy.data?.adminRecipients ?? []).join(', '),
+  };
+
+  const saveFailurePolicy = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPolicyBusy(true);
+    try {
+      const adminRecipients = effectivePolicy.adminRecipientsText
+        .split(/[\n,;]/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const saved = await api.put<FailurePolicy>('/api/notifications/failure-policy', {
+        autoRetries: effectivePolicy.autoRetries,
+        notifyAdminsOnFailure: effectivePolicy.notifyAdminsOnFailure,
+        adminRecipients,
+      });
+      failurePolicy.setData(saved);
+      setPolicyDraft(null);
+      flash.ok('评审失败重试与管理员通知策略已保存');
+    } catch (err) {
+      flash.fail(errorText(err));
+    } finally {
+      setPolicyBusy(false);
+    }
+  };
 
   const makeEmptyChat = (): ChatForm => ({
     name: '',
@@ -66,6 +108,13 @@ export function NotificationsPage() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [testResult, setTestResult] = useState<Record<number, string>>({});
+  const channelFormRef = useRef<HTMLElement>(null);
+
+  const scrollToChannelForm = () => {
+    requestAnimationFrame(() => {
+      channelFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    });
+  };
   const ids = {
     name: useId(),
     host: useId(),
@@ -81,11 +130,12 @@ export function NotificationsPage() {
     templateHint: useId(),
   };
 
-  const startCreate = (type: 'email' | 'chat') => {
+  const startCreate = (type: 'email' | 'chat', scroll = false) => {
     setKind(type);
     setEditingId(null);
     setEmail(emptyEmail);
     setChat(makeEmptyChat());
+    if (scroll) scrollToChannelForm();
   };
 
   const edit = (c: Channel) => {
@@ -121,6 +171,7 @@ export function NotificationsPage() {
         template: c.template ?? t('notifications.defaultTemplate'),
       });
     }
+    scrollToChannelForm();
   };
 
   const save = async (e: React.FormEvent) => {
@@ -233,14 +284,6 @@ export function NotificationsPage() {
           <h1>{t('notifications.pageTitle')}</h1>
           <p className="page-subtitle">{t('notifications.subtitle')}</p>
         </div>
-        <div className="actions">
-          <button type="button" className="secondary" onClick={() => startCreate('email')}>
-            {t('notifications.addEmail')}
-          </button>
-          <button type="button" className="secondary" onClick={() => startCreate('chat')}>
-            {t('notifications.addChat')}
-          </button>
-        </div>
       </div>
 
       <section className="card trigger-rule-card" aria-labelledby="trigger-rule-title">
@@ -264,12 +307,119 @@ export function NotificationsPage() {
         </fieldset>
       </section>
 
+      <section className="card" aria-labelledby="failure-policy-title">
+        <div className="card-head">
+          <div>
+            <h2 id="failure-policy-title">评审失败重试与管理员告警</h2>
+            <p className="muted small" style={{ margin: '2px 0 0' }}>
+              评审失败时先自动重试；全部重试仍失败后仅通知管理员排查原因，不再打扰上库开发人员。
+            </p>
+          </div>
+        </div>
+        <form className="form" onSubmit={saveFailurePolicy}>
+          <div className="two-col">
+            <label>
+              失败自动重试次数（0 表示不重试，最多 5 次）
+              <select
+                value={effectivePolicy.autoRetries}
+                onChange={(e) =>
+                  setPolicyDraft({
+                    ...effectivePolicy,
+                    autoRetries: Number(e.target.value),
+                  })
+                }
+              >
+                {[0, 1, 2, 3, 4, 5].map((n) => (
+                  <option key={n} value={n}>
+                    {n === 0 ? '0 次（不自动重试）' : `${n} 次（共尝试 ${n + 1} 次）`}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              失败告警接收人（可选，逗号分隔）
+              <input
+                value={effectivePolicy.adminRecipientsText}
+                onChange={(e) =>
+                  setPolicyDraft({
+                    ...effectivePolicy,
+                    adminRecipientsText: e.target.value,
+                  })
+                }
+                placeholder="留空则自动通知所有超级管理员与服务管理员"
+              />
+            </label>
+          </div>
+          <label className="checkbox">
+            <input
+              type="checkbox"
+              disabled={trigger.data?.trigger === 'success_only'}
+              checked={
+                trigger.data?.trigger === 'success_only'
+                  ? false
+                  : effectivePolicy.notifyAdminsOnFailure
+              }
+              onChange={(e) =>
+                setPolicyDraft({
+                  ...effectivePolicy,
+                  notifyAdminsOnFailure: e.target.checked,
+                })
+              }
+            />
+            <span>
+              所有重试均失败后通知管理员排查
+              {trigger.data?.trigger === 'success_only' && (
+                <span className="small muted">（当前触发规则为「仅评审成功」，不会发送失败告警）</span>
+              )}
+            </span>
+          </label>
+          <div className="actions">
+            <button type="submit" className="primary small" disabled={policyBusy}>
+              保存失败策略
+            </button>
+          </div>
+        </form>
+      </section>
+
       <div className="split">
-        <section className="card" aria-labelledby="channel-form-title">
-          <h2 id="channel-form-title">
-            {editingId === null ? t('notifications.form.createTitle') : t('notifications.form.editTitle')} (
-            {kind === 'email' ? t('notifications.type.email') : t('notifications.type.chat')})
-          </h2>
+        <section className="card" ref={channelFormRef} aria-labelledby="channel-form-title">
+          <div className="card-head">
+            <h2 id="channel-form-title">
+              {editingId === null
+                ? t('notifications.form.createTitle')
+                : `${t('notifications.form.editTitle')} (${kind === 'email' ? t('notifications.type.email') : t('notifications.type.chat')})`}
+            </h2>
+            {editingId === null ? (
+              <div className="share-filter-group" role="tablist" aria-label="选择渠道类型">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={kind === 'email'}
+                  className={`share-filter-pill ${kind === 'email' ? 'active' : ''}`}
+                  onClick={() => setKind('email')}
+                >
+                  {t('notifications.type.email')}
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={kind === 'chat'}
+                  className={`share-filter-pill ${kind === 'chat' ? 'active' : ''}`}
+                  onClick={() => setKind('chat')}
+                >
+                  {t('notifications.type.chat')}
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="link small"
+                onClick={() => startCreate(kind)}
+              >
+                + 转为新增
+              </button>
+            )}
+          </div>
           <form className="form" onSubmit={save}>
             <label htmlFor={ids.name}>
               {t('notifications.form.name')}
@@ -423,7 +573,25 @@ export function NotificationsPage() {
 
         <div className="grow stack">
           <section className="card" aria-labelledby="channel-list-title">
-            <h2 id="channel-list-title">{t('notifications.list.title')}</h2>
+            <div className="card-head">
+              <h2 id="channel-list-title">{t('notifications.list.title')}</h2>
+              <div className="actions">
+                <button
+                  type="button"
+                  className="secondary small"
+                  onClick={() => startCreate('email', true)}
+                >
+                  + {t('notifications.addEmail')}
+                </button>
+                <button
+                  type="button"
+                  className="secondary small"
+                  onClick={() => startCreate('chat', true)}
+                >
+                  + {t('notifications.addChat')}
+                </button>
+              </div>
+            </div>
             {channels.data && channels.data.length === 0 && (
               <p className="muted">{t('notifications.list.empty')}</p>
             )}
@@ -445,7 +613,7 @@ export function NotificationsPage() {
                   <tbody>
                     {channels.data.map((c) => (
                       <Fragment key={c.id}>
-                        <tr>
+                        <tr className={editingId === c.id ? 'row-editing' : undefined}>
                           <td>{c.name}</td>
                           <td>
                             <span className={`tag ${c.type}`}>
