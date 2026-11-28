@@ -66,6 +66,7 @@ hub 不做任何账号映射。`{{author}}` 的值（对 SVN 即上库人员名�
 - headers: `X-Gateway-Key: <secret>`
 
 模板（网关需要 receiverUid/title/body/url 四个字段）：
+占位符写在 JSON 字符串值的双引号内。提交说明和评审摘要中的引号、反斜杠及换行由系统转义，无需手动处理。
 
 ```json
 {

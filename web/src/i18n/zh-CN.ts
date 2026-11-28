@@ -483,7 +483,7 @@ export const zhCN = {
   'notifications.form.template': '消息模板',
   'notifications.form.templateHintPrefix': '可用占位符：{placeholders}。纯文本模板会包装为 ',
   'notifications.form.templateHintMid': '；以 ',
-  'notifications.form.templateHintSuffix': ' 开头的模板按整包 JSON 处理（渲染后校验）。',
+  'notifications.form.templateHintSuffix': ' 开头的模板按整包 JSON 处理。请将占位符写在带双引号的字符串值内。',
   'notifications.defaultTemplate': '【代码评审】{{repo}} {{node}} {{status}}\n上库人员：{{author}}\n摘要：{{summary}}\n报告：{{report_url}}',
   'notifications.list.title': '渠道列表',
   'notifications.list.caption': '通知渠道列表',
