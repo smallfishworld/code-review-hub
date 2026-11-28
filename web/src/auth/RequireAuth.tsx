@@ -44,14 +44,15 @@ export function RequirePermission({
   children: React.ReactNode;
 }) {
   const { can } = useAuth();
+  const { t } = useI18n();
   if (!can(perm)) {
     return (
       <div className="card narrow">
-        <h2>无访问权限（403）</h2>
-        <p className="muted">您当前的账号角色没有访问此页面的权限，如需开通请联系超级管理员。</p>
+        <h2>{t('auth.forbiddenTitle')}</h2>
+        <p className="muted">{t('auth.forbiddenBody')}</p>
         <div className="actions">
           <Link to="/repos" className="btn-link secondary">
-            返回首页
+            {t('auth.backHome')}
           </Link>
         </div>
       </div>

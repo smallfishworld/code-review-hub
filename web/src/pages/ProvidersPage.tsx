@@ -155,6 +155,7 @@ export function ProvidersPage() {
               {t('common.name')}
               <input
                 id={ids.name}
+                name="providerName"
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
                 placeholder={t('providers.form.namePlaceholder')}
@@ -165,6 +166,7 @@ export function ProvidersPage() {
               {t('providers.form.apiBase')}
               <input
                 id={ids.apiBase}
+                name="apiBase"
                 value={form.apiBase}
                 onChange={(e) => setForm({ ...form, apiBase: e.target.value })}
                 placeholder="https://api.example.com/v1"
@@ -176,6 +178,7 @@ export function ProvidersPage() {
                 {t('providers.form.model')}
                 <input
                   id={ids.model}
+                  name="model"
                   value={form.model}
                   onChange={(e) => setForm({ ...form, model: e.target.value })}
                   placeholder="gpt-4o / claude-sonnet"
@@ -186,6 +189,7 @@ export function ProvidersPage() {
                 {t('providers.form.protocol')}
                 <select
                   id={ids.protocol}
+                  name="protocol"
                   value={form.protocol}
                   onChange={(e) => setForm({ ...form, protocol: e.target.value })}
                 >
@@ -201,6 +205,7 @@ export function ProvidersPage() {
               {t('providers.form.apiKey')}
               <input
                 id={ids.apiKey}
+                name="apiKey"
                 type="password"
                 value={form.apiKey}
                 onChange={(e) => setForm({ ...form, apiKey: e.target.value })}

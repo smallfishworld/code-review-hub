@@ -81,14 +81,20 @@ export interface ChatSecret {
 
 export const MASK = '********';
 
-/** Reduce a URL to its origin so tokens in path/query never leak. */
-export function maskUrl(raw: string): string {
+/** Reduce a URL to its origin + masked path hint so tokens in path/query never leak. */
+export function maskUrl(raw: string, pathHint?: string): string {
   try {
     const u = new URL(raw);
-    return `${u.origin}${MASK}`;
+    const hint = pathHint ?? extractPathHint(u.pathname);
+    return `${u.origin}/${hint}***`;
   } catch {
     return MASK;
   }
+}
+
+function extractPathHint(pathname: string): string {
+  const seg = pathname.replace(/^\/+/, '');
+  return seg ? seg.slice(0, 1) : '';
 }
 
 function isHttpUrl(value: string): boolean {
@@ -154,7 +160,13 @@ export class ChannelService {
       const headers: Record<string, string> = {};
       for (const name of headerNames) headers[name] = MASK;
       config = {
-        webhookUrl: row.credential_id !== null ? maskUrl(String(stored.webhookHost ?? '')) : '',
+        webhookUrl:
+          row.credential_id !== null
+            ? maskUrl(
+                String(stored.webhookHost ?? ''),
+                typeof stored.webhookPathHint === 'string' ? stored.webhookPathHint : ''
+              )
+            : '',
         webhookHost: stored.webhookHost ?? '',
         headers,
         hasCredential: row.credential_id !== null,
@@ -465,15 +477,20 @@ export class ChannelService {
     else credentialId = this.credentials.store(`channel:${name}`, 'chat', payload);
 
     let webhookHost: string;
+    let webhookPathHint: string;
     try {
-      webhookHost = new URL(secret.webhookUrl).origin;
+      const parsedUrl = new URL(secret.webhookUrl);
+      webhookHost = parsedUrl.origin;
+      webhookPathHint = extractPathHint(parsedUrl.pathname);
     } catch {
       webhookHost = '';
+      webhookPathHint = '';
     }
 
     return {
       configJson: {
         webhookHost,
+        webhookPathHint,
         headerNames: Object.keys(secret.headers),
         // keep the legacy display field in sync for older clients
         webhookUrl: prev.webhookUrl ?? '',

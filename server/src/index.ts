@@ -41,18 +41,22 @@ const authRequired = process.env.AUTH_REQUIRED !== 'false';
 /** Runtime log sink shared by every service and the web console. */
 const logs = new LogService(5000, dataDir);
 
+const logLevel = process.env.LOG_LEVEL ?? 'info';
+
 const app = Fastify({
   trustProxy: process.env.TRUST_PROXY === 'true',
+  disableRequestLogging: logLevel !== 'debug',
   logger: {
-    level: process.env.LOG_LEVEL ?? 'info',
+    level: logLevel,
     // Mirror pino output into the runtime log so the web console sees HTTP
-    // errors too. request-level info lines are noisy at debug; keep them out.
+    // errors too. Per-request info chatter is excluded unless LOG_LEVEL=debug.
     stream: {
       write(msg: string) {
         try {
           const row = JSON.parse(msg) as { level?: number; msg?: string; err?: { message?: string } };
-          const level = row.level === 50 ? 'error' : row.level === 40 ? 'warn' : 'info';
-          if (level === 'info' && row.msg === 'request completed') return;
+          const level =
+            row.level === 50 ? 'error' : row.level === 40 ? 'warn' : (row.level ?? 30) <= 20 ? 'debug' : 'info';
+          if (level === 'info' && (row.msg === 'request completed' || row.msg === 'incoming request')) return;
           const text = row.err?.message ? `${row.msg}: ${row.err.message}` : (row.msg ?? msg.trim());
           logs.log(level, 'server', text);
         } catch {

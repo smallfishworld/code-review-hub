@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { api, type LogFile, type LogLine, type LogLevel } from '../api/client';
 import { errorText, usePageTitle } from '../api/hooks';
 import { useI18n, type MessageKey } from '../i18n';
@@ -34,6 +34,12 @@ export function LogsPage() {
   const [pausedQ, setPausedQ] = useState(''); // query applied while paused
   const [files, setFiles] = useState<LogFile[]>([]);
   const [follow, setFollow] = useState(true);
+  const ids = {
+    live: useId(),
+    level: useId(),
+    src: useId(),
+    search: useId(),
+  };
 
   const scrollerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -113,8 +119,10 @@ export function LogsPage() {
           <p className="page-subtitle">{t('logs.subtitle')}</p>
         </div>
         <div className="logs-toolbar">
-          <label className="logs-live">
+          <label className="logs-live" htmlFor={ids.live}>
             <input
+              id={ids.live}
+              name="liveRefresh"
               type="checkbox"
               checked={live}
               onChange={(e) => (e.target.checked ? resumeLive() : pauseLive())}
@@ -132,9 +140,11 @@ export function LogsPage() {
       <section className="card logs-console-card" aria-label={t('logs.consoleAria')}>
         <div className="logs-console-bar">
           <div className="logs-filters">
-            <label>
+            <label htmlFor={ids.level}>
               {t('logs.filter.level')}
               <select
+                id={ids.level}
+                name="logLevel"
                 value={level}
                 onChange={(e) => {
                   setLevel(e.target.value as LogLevel | '');
@@ -149,9 +159,9 @@ export function LogsPage() {
                 ))}
               </select>
             </label>
-            <label>
+            <label htmlFor={ids.src}>
               {t('logs.filter.source')}
-              <select value={src} onChange={(e) => setSrc(e.target.value)} disabled={!live}>
+              <select id={ids.src} name="logSource" value={src} onChange={(e) => setSrc(e.target.value)} disabled={!live}>
                 <option value="">{t('common.all')}</option>
                 {SOURCES.filter(Boolean).map((s) => (
                   <option key={s} value={s}>
@@ -160,9 +170,11 @@ export function LogsPage() {
                 ))}
               </select>
             </label>
-            <label className="logs-search">
+            <label className="logs-search" htmlFor={ids.search}>
               {t('logs.filter.search')}
               <input
+                id={ids.search}
+                name="logSearch"
                 type="search"
                 value={q}
                 onChange={(e) => setQ(e.target.value)}

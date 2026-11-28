@@ -37,7 +37,7 @@ export interface SenderOptions {
 
 export interface NotificationLogEntry {
   id: number;
-  taskId: number;
+  taskId: number | null;
   channelId: number;
   channelName: string | null;
   channelType: string | null;
@@ -279,8 +279,13 @@ export class NotificationSender {
     this.log(taskId, channel.id, 'failed', `重试 ${this.attempts} 次后失败：${lastError}`);
   }
 
+  /** Record a manual test-send attempt (task_id = NULL) in notification_log. */
+  logTest(channelId: number, status: 'sent' | 'failed', detail: string | null): void {
+    this.log(null, channelId, status, detail);
+  }
+
   private log(
-    taskId: number,
+    taskId: number | null,
     channelId: number,
     status: 'sent' | 'failed',
     detail: string | null
@@ -318,7 +323,7 @@ export class NotificationSender {
     ) as Record<string, unknown>[];
     return rows.map((r) => ({
       id: r.id as number,
-      taskId: r.task_id as number,
+      taskId: (r.task_id as number | null) ?? null,
       channelId: r.channel_id as number,
       channelName: (r.channel_name as string | null) ?? null,
       channelType: (r.channel_type as string | null) ?? null,

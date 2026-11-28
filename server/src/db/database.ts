@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 export type RepoType = 'svn' | 'git';
 
-export const SCHEMA_VERSION = 16;
+export const SCHEMA_VERSION = 17;
 
 /**
  * Ordered, append-only list of migrations. Each entry runs once, tracked in
@@ -538,6 +538,29 @@ const MIGRATIONS: { version: number; name: string; up: (db: Database.Database) =
         '查看代码库与评审报告，支持手动触发评审与提交缺陷反馈',
         JSON.stringify(['review:trigger', 'feedback:write'])
       );
+    },
+  },
+  {
+    version: 17,
+    name: 'nullable-notification-log-task',
+    up: (db) => {
+      // Allow test-send records (task_id IS NULL) in notification_log so admins
+      // can inspect test delivery history alongside task notifications.
+      db.exec(`
+        CREATE TABLE notification_log_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          task_id INTEGER REFERENCES task(id),
+          channel_id INTEGER NOT NULL REFERENCES notification_channel(id),
+          status TEXT NOT NULL CHECK (status IN ('sent','failed')),
+          detail TEXT,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        );
+        INSERT INTO notification_log_new (id, task_id, channel_id, status, detail, created_at)
+        SELECT id, task_id, channel_id, status, detail, created_at FROM notification_log;
+        DROP TABLE notification_log;
+        ALTER TABLE notification_log_new RENAME TO notification_log;
+        CREATE INDEX idx_notif_log_task ON notification_log(task_id);
+      `);
     },
   },
 ];

@@ -337,6 +337,14 @@ function parseGitLogRecords(stdout: string, hasParents: boolean): { entry: GitLo
   return entries;
 }
 
+/** Guard git ref/sha arguments against option injection (leading `-`) or control characters. */
+function assertSafeGitRef(value: string, label: string): string {
+  if (!value || value.startsWith('-') || /[\s\0]/.test(value)) {
+    throw new GitError(`非法 Git ${label}: ${value}`, null, '');
+  }
+  return value;
+}
+
 /** Fetch and check out a commit in a working clone (with credentials). */
 export async function gitPrepareCommit(
   repoDir: string,
@@ -345,14 +353,15 @@ export async function gitPrepareCommit(
   auth: GitAuth = {},
   opts: GitRunOptions = {}
 ): Promise<void> {
+  const safeSha = assertSafeGitRef(sha, 'commit');
   const remote = gitRemote(remoteUrl, auth, opts.env);
-  await runGit(['fetch', '--no-tags', '--', remote.url, sha], {
+  await runGit(['fetch', '--no-tags', '--', remote.url, safeSha], {
     cwd: repoDir,
     ...opts,
     env: remote.env,
     timeoutMs: opts.timeoutMs ?? 5 * 60_000,
   });
-  await runGit(['checkout', '--force', sha], {
+  await runGit(['checkout', '--force', safeSha, '--'], {
     cwd: repoDir,
     ...opts,
     env: remote.env,
@@ -366,6 +375,7 @@ export async function gitResolveSha(
   rev: string,
   opts: GitRunOptions = {}
 ): Promise<string | null> {
+  if (!rev || rev.startsWith('-') || /[\s\0]/.test(rev)) return null;
   try {
     const { stdout } = await runGit(['rev-parse', '--verify', `${rev}^{commit}`], {
       cwd,
@@ -388,10 +398,11 @@ export async function gitFetchBranch(
   auth: GitAuth = {},
   opts: GitRunOptions = {}
 ): Promise<void> {
+  const safeBranch = assertSafeGitRef(branch, 'branch');
   const remote = gitRemote(remoteUrl, auth, opts.env);
   // Fetch into the remote-tracking ref so callers can resolve origin/<branch>.
   // (A bare `git fetch <url> <branch>` only writes FETCH_HEAD.)
-  await runGit(['fetch', '--no-tags', '--', remote.url, `+refs/heads/${branch}:refs/remotes/origin/${branch}`], {
+  await runGit(['fetch', '--no-tags', '--', remote.url, `+refs/heads/${safeBranch}:refs/remotes/origin/${safeBranch}`], {
     cwd: repoDir,
     ...opts,
     env: remote.env,

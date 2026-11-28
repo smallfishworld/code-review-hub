@@ -46,9 +46,11 @@ export class RepairError extends Error {
 const inFlight = new Set<string>();
 const WINDOWS = process.platform === 'win32';
 
+const OCR_NPM_SPEC = '@smallfishworld/open-code-review-svn@svn';
+
 export function manualInstallHint(command: string, platform = process.platform): string {
   if (command === 'ocr') {
-    return 'npm install -g @smallfishworld/open-code-review-svn@latest';
+    return `npm install -g ${OCR_NPM_SPEC}`;
   }
   if (command === 'svn') {
     if (platform === 'darwin') return 'brew install subversion';
@@ -73,7 +75,7 @@ export async function resolveRepairPlan(
   if (command === 'ocr') {
     const npm = await locator('npm');
     if (!npm.path) return null;
-    const args = ['install', '-g', '@smallfishworld/open-code-review-svn@latest'];
+    const args = ['install', '-g', OCR_NPM_SPEC];
     return {
       command,
       binary: npm.path,
@@ -221,6 +223,10 @@ export async function repairDependency(
     }
 
     if (run.code !== 0 || !repaired) {
+      const versionHint =
+        command === 'ocr' && dep?.error?.includes('版本过低')
+          ? `（npm 镜像缓存或 dist-tag 可能仍指向旧版，请确认使用 ${OCR_NPM_SPEC} 或指定 >= ${dep.minVersion ?? '1.12.13'} 的具体版本）`
+          : '';
       return {
         ok: false,
         command,
@@ -231,7 +237,7 @@ export async function repairDependency(
         error:
           run.code !== 0
             ? `安装命令退出码 ${run.code}，请查看下方输出日志或按官方指引手动安装。`
-            : `安装命令已执行完成，但重新检测仍未通过（${dep?.error ?? '可能需重启服务以刷新 PATH'}）。`,
+            : `安装命令已执行完成，但重新检测仍未通过（${dep?.error ?? '可能需重启服务以刷新 PATH'}）${versionHint}。`,
         report,
       };
     }

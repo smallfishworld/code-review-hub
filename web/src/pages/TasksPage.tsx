@@ -287,9 +287,13 @@ function TaskDetail({ taskId }: { taskId: number }) {
   const canTrigger = usePermission('review:trigger');
   const canFeedback = usePermission('feedback:write');
   const task = useApi(() => api.get<Task>(`/api/tasks/${taskId}`), [taskId]);
+  const taskSucceeded = task.data?.status === 'succeeded';
   const report = useApi(
-    () => api.get<ReportDetail>(`/api/tasks/${taskId}/report`).catch(() => null),
-    [taskId]
+    () =>
+      taskSucceeded
+        ? api.get<ReportDetail>(`/api/tasks/${taskId}/report`).catch(() => null)
+        : Promise.resolve(null),
+    [taskId, taskSucceeded]
   );
   const mcpAudit = useApi(
     () => api.get<TaskMcpAudit>(`/api/tasks/${taskId}/mcp`).catch(() => null),
@@ -302,10 +306,15 @@ function TaskDetail({ taskId }: { taskId: number }) {
   const flash = useFlash();
   const [busy, setBusy] = useState(false);
   const share = useApi(
-    () => api.get<{ token: string; url: string; rotatedAt: string | null }>(
-      `/api/tasks/${taskId}/share`
-    ).catch((e: unknown) => ((e as ApiError)?.status === 404 ? null : null)),
-    [taskId]
+    () =>
+      taskSucceeded
+        ? api
+            .get<{ token: string; url: string; rotatedAt: string | null }>(
+              `/api/tasks/${taskId}/share`
+            )
+            .catch((e: unknown) => ((e as ApiError)?.status === 404 ? null : null))
+        : Promise.resolve(null),
+    [taskId, taskSucceeded]
   );
   const [shareBusy, setShareBusy] = useState(false);
   const [pendingFeedback, setPendingFeedback] = useState<{

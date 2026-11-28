@@ -125,7 +125,7 @@ describe('notification channel API', () => {
       template: string;
       config: { webhookUrl: string; headers: Record<string, string>; hasCredential: boolean };
     };
-    expect(body.config.webhookUrl).toBe('https://chat.example.com********');
+    expect(body.config.webhookUrl).toBe('https://chat.example.com/h***');
     expect(body.config.headers['X-Auth']).toBe('********');
     expect(body.config.hasCredential).toBe(true);
     expect(body.template).toContain('{{repo}}');

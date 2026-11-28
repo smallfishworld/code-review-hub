@@ -69,6 +69,7 @@ export function LoginPage() {
           {t('login.username')}
           <input
             id={ids.username}
+            name="username"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
             autoComplete="username"
@@ -80,6 +81,7 @@ export function LoginPage() {
           {t('login.password')}
           <PasswordInput
             id={ids.password}
+            name="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             autoComplete="current-password"
@@ -98,7 +100,7 @@ export function LoginPage() {
         </button>
         {status?.registrationEnabled && (
           <div className="login-footer-link">
-            <Link to="/register">还没有账号？申请注册</Link>
+            <Link to="/register">{t('login.registerLink')}</Link>
           </div>
         )}
       </form>

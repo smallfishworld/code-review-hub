@@ -37,15 +37,30 @@ export function SettingsPage() {
       setLastRepair(res);
       deps.setData(res.report);
       if (res.ok) {
-        flash.ok(`依赖「${command}」已通过官方渠道修复并检测通过`);
+        flash.ok(t('settings.deps.repairOkToast', { command }));
       } else {
-        flash.fail(res.error ?? `依赖「${command}」自动修复未完成`);
+        flash.fail(res.error ?? t('settings.deps.repairFailToast', { command }));
       }
     } catch (err) {
       flash.fail(errorText(err));
     } finally {
       setRepairingCmd(null);
     }
+  };
+
+  const localizedDepNote = (dep: DepInfo): string | null => {
+    if (dep.command === 'ocr') return t('settings.deps.note.ocr');
+    if (dep.command === 'svn') return t('settings.deps.note.svn');
+    return dep.note ?? null;
+  };
+
+  const localizedDepError = (dep: DepInfo): string | null => {
+    if (!dep.error) return null;
+    const m = /版本过低：需要\s*>=\s*([^\s，,]+)[，,]\s*当前\s*(.+)/.exec(dep.error);
+    if (m) {
+      return t('settings.deps.versionTooLow', { minVersion: m[1], actual: m[2] });
+    }
+    return dep.error;
   };
 
   return (
@@ -59,8 +74,8 @@ export function SettingsPage() {
 
       <section className="card trigger-rule-card" aria-labelledby="lang-setting-title">
         <div className="trigger-rule-head">
-          <h2 id="lang-setting-title">界面语言 / Language</h2>
-          <span className="muted small">切换控制台的显示语言，设置保存在当前浏览器中。</span>
+          <h2 id="lang-setting-title">{t('settings.lang.title')}</h2>
+          <span className="muted small">{t('settings.lang.subtitle')}</span>
         </div>
         <LanguageSwitcher />
       </section>
@@ -80,7 +95,7 @@ export function SettingsPage() {
         {deps.loading && <p className="muted">{t('settings.deps.checking')}</p>}
         {repairingCmd && (
           <div className="alert info" role="status">
-            正在通过官方渠道下载并安装「{repairingCmd}」，可能需要几十秒，请勿关闭页面…
+            {t('settings.deps.repairingBanner', { command: repairingCmd })}
           </div>
         )}
         {deps.error && (
@@ -107,6 +122,8 @@ export function SettingsPage() {
                 {deps.data.results.map((dep) => {
                   const healthy = dep.found && dep.executable;
                   const isRepairing = repairingCmd === dep.command;
+                  const noteText = localizedDepNote(dep);
+                  const errText = localizedDepError(dep);
                   return (
                     <tr key={dep.command}>
                       <td className="mono">{dep.command}</td>
@@ -116,11 +133,13 @@ export function SettingsPage() {
                         </span>
                       </td>
                       <td className="small">{dep.version ?? '—'}</td>
-                      <td className="small">
-                        {dep.conditional ? t('settings.deps.conditional') : t('settings.deps.required')}
-                        {dep.minVersion ? t('settings.deps.minVersion', { version: dep.minVersion }) : ''}
-                        {dep.note ? `: ${dep.note}` : ''}
-                        {dep.error ? `: ${dep.error}` : ''}
+                      <td className="small dep-note-cell">
+                        <div>
+                          {dep.conditional ? t('settings.deps.conditional') : t('settings.deps.required')}
+                          {dep.minVersion ? t('settings.deps.minVersion', { version: dep.minVersion }) : ''}
+                        </div>
+                        {noteText && <div className="muted">{noteText}</div>}
+                        {errText && <div className="dep-note-error">{errText}</div>}
                       </td>
                       <td className="actions-cell">
                         {!healthy ? (
@@ -132,7 +151,7 @@ export function SettingsPage() {
                                 disabled={repairingCmd !== null || checking}
                                 onClick={() => void repairDep(dep.command)}
                               >
-                                {isRepairing ? '正在从官方渠道修复…' : '修复'}
+                                {isRepairing ? t('settings.deps.repairing') : t('settings.deps.repair')}
                               </button>
                             )}
                             {dep.officialUrl && (
@@ -142,12 +161,12 @@ export function SettingsPage() {
                                 rel="noreferrer"
                                 className="small"
                               >
-                                官方下载
+                                {t('settings.deps.officialDownload')}
                               </a>
                             )}
                           </div>
                         ) : (
-                          <span className="small muted">正常</span>
+                          <span className="small muted">{t('settings.deps.healthy')}</span>
                         )}
                       </td>
                     </tr>
@@ -164,21 +183,25 @@ export function SettingsPage() {
               <div>
                 <strong>
                   {lastRepair.ok
-                    ? `依赖「${lastRepair.command}」修复成功`
-                    : `依赖「${lastRepair.command}」未完成自动修复`}
+                    ? t('settings.deps.repairOkTitle', { command: lastRepair.command })
+                    : t('settings.deps.repairFailTitle', { command: lastRepair.command })}
                 </strong>
                 {lastRepair.method && (
-                  <div className="small">执行命令：<code>{lastRepair.method}</code></div>
+                  <div className="small">
+                    {t('settings.deps.execCmd')}
+                    <code>{lastRepair.method}</code>
+                  </div>
                 )}
                 {lastRepair.error && <div className="small">{lastRepair.error}</div>}
                 {!lastRepair.ok && lastRepair.manualCommand && (
                   <div className="small" style={{ marginTop: 6 }}>
-                    官方安装命令：<code>{lastRepair.manualCommand}</code>
+                    {t('settings.deps.manualCmd')}
+                    <code>{lastRepair.manualCommand}</code>
                     {lastRepair.officialUrl && (
                       <>
                         {' · '}
                         <a href={lastRepair.officialUrl} target="_blank" rel="noreferrer">
-                          前往官方下载页
+                          {t('settings.deps.goOfficial')}
                         </a>
                       </>
                     )}
@@ -188,7 +211,7 @@ export function SettingsPage() {
             </div>
             {lastRepair.output && (
               <details open={!lastRepair.ok}>
-                <summary className="small">查看安装输出日志</summary>
+                <summary className="small">{t('settings.deps.viewOutput')}</summary>
                 <pre className="raw">{lastRepair.output}</pre>
               </details>
             )}

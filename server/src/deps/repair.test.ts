@@ -15,7 +15,7 @@ describe('dependency repair plan resolution', () => {
     const plan = await resolveRepairPlan('ocr', 'darwin', mockLocator({ npm: '/usr/bin/npm' }));
     expect(plan).not.toBeNull();
     expect(plan!.binary).toBe('/usr/bin/npm');
-    expect(plan!.args).toEqual(['install', '-g', '@smallfishworld/open-code-review-svn@latest']);
+    expect(plan!.args).toEqual(['install', '-g', '@smallfishworld/open-code-review-svn@svn']);
   });
 
   it('resolves svn/git via brew on macOS and winget on Windows', async () => {

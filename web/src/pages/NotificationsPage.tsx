@@ -87,7 +87,7 @@ export function NotificationsPage() {
       });
       failurePolicy.setData(saved);
       setPolicyDraft(null);
-      flash.ok('评审失败重试与管理员通知策略已保存');
+      flash.ok(t('notifications.failurePolicy.toastSaved'));
     } catch (err) {
       flash.fail(errorText(err));
     } finally {
@@ -106,6 +106,7 @@ export function NotificationsPage() {
   const [email, setEmail] = useState<EmailForm>(emptyEmail);
   const [chat, setChat] = useState<ChatForm>(makeEmptyChat);
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingWebhookHint, setEditingWebhookHint] = useState<string>('');
   const [busy, setBusy] = useState(false);
   const [testResult, setTestResult] = useState<Record<number, string>>({});
   const channelFormRef = useRef<HTMLElement>(null);
@@ -116,6 +117,9 @@ export function NotificationsPage() {
     });
   };
   const ids = {
+    retries: useId(),
+    recipients: useId(),
+    notifyAdmins: useId(),
     name: useId(),
     host: useId(),
     port: useId(),
@@ -133,6 +137,7 @@ export function NotificationsPage() {
   const startCreate = (type: 'email' | 'chat', scroll = false) => {
     setKind(type);
     setEditingId(null);
+    setEditingWebhookHint('');
     setEmail(emptyEmail);
     setChat(makeEmptyChat());
     if (scroll) scrollToChannelForm();
@@ -142,6 +147,7 @@ export function NotificationsPage() {
     setKind(c.type);
     setEditingId(c.id);
     if (c.type === 'email') {
+      setEditingWebhookHint('');
       const cfg = c.config as {
         host?: string;
         port?: number;
@@ -161,7 +167,8 @@ export function NotificationsPage() {
         password: '',
       });
     } else {
-      const cfg = c.config as { headers?: Record<string, string> };
+      const cfg = c.config as { webhookUrl?: string; headers?: Record<string, string> };
+      setEditingWebhookHint(cfg.webhookUrl ?? '');
       setChat({
         name: c.name,
         webhookUrl: '',
@@ -216,6 +223,7 @@ export function NotificationsPage() {
       }
       flash.ok(t('notifications.toast.saved'));
       setEditingId(null);
+      setEditingWebhookHint('');
       setEmail(emptyEmail);
       setChat(makeEmptyChat());
       await channels.reload();
@@ -264,6 +272,8 @@ export function NotificationsPage() {
       setTestResult((prev) => ({ ...prev, [c.id]: res.message }));
     } catch (err) {
       setTestResult((prev) => ({ ...prev, [c.id]: errorText(err) }));
+    } finally {
+      void logs.reload();
     }
   };
 
@@ -310,17 +320,19 @@ export function NotificationsPage() {
       <section className="card" aria-labelledby="failure-policy-title">
         <div className="card-head">
           <div>
-            <h2 id="failure-policy-title">评审失败重试与管理员告警</h2>
+            <h2 id="failure-policy-title">{t('notifications.failurePolicy.title')}</h2>
             <p className="muted small" style={{ margin: '2px 0 0' }}>
-              评审失败时先自动重试；全部重试仍失败后仅通知管理员排查原因，不再打扰上库开发人员。
+              {t('notifications.failurePolicy.subtitle')}
             </p>
           </div>
         </div>
         <form className="form" onSubmit={saveFailurePolicy}>
           <div className="two-col">
-            <label>
-              失败自动重试次数（0 表示不重试，最多 5 次）
+            <label htmlFor={ids.retries}>
+              {t('notifications.failurePolicy.retries')}
               <select
+                id={ids.retries}
+                name="autoRetries"
                 value={effectivePolicy.autoRetries}
                 onChange={(e) =>
                   setPolicyDraft({
@@ -331,14 +343,18 @@ export function NotificationsPage() {
               >
                 {[0, 1, 2, 3, 4, 5].map((n) => (
                   <option key={n} value={n}>
-                    {n === 0 ? '0 次（不自动重试）' : `${n} 次（共尝试 ${n + 1} 次）`}
+                    {n === 0
+                      ? t('notifications.failurePolicy.retriesZero')
+                      : t('notifications.failurePolicy.retriesN', { n, total: n + 1 })}
                   </option>
                 ))}
               </select>
             </label>
-            <label>
-              失败告警接收人（可选，逗号分隔）
+            <label htmlFor={ids.recipients}>
+              {t('notifications.failurePolicy.recipients')}
               <input
+                id={ids.recipients}
+                name="adminRecipients"
                 value={effectivePolicy.adminRecipientsText}
                 onChange={(e) =>
                   setPolicyDraft({
@@ -346,12 +362,14 @@ export function NotificationsPage() {
                     adminRecipientsText: e.target.value,
                   })
                 }
-                placeholder="留空则自动通知所有超级管理员与服务管理员"
+                placeholder={t('notifications.failurePolicy.recipientsPlaceholder')}
               />
             </label>
           </div>
-          <label className="checkbox">
+          <label className="checkbox" htmlFor={ids.notifyAdmins}>
             <input
+              id={ids.notifyAdmins}
+              name="notifyAdminsOnFailure"
               type="checkbox"
               disabled={trigger.data?.trigger === 'success_only'}
               checked={
@@ -367,15 +385,15 @@ export function NotificationsPage() {
               }
             />
             <span>
-              所有重试均失败后通知管理员排查
+              {t('notifications.failurePolicy.notifyAdmins')}
               {trigger.data?.trigger === 'success_only' && (
-                <span className="small muted">（当前触发规则为「仅评审成功」，不会发送失败告警）</span>
+                <span className="small muted">{t('notifications.failurePolicy.successOnlyNote')}</span>
               )}
             </span>
           </label>
           <div className="actions">
             <button type="submit" className="primary small" disabled={policyBusy}>
-              保存失败策略
+              {t('notifications.failurePolicy.save')}
             </button>
           </div>
         </form>
@@ -390,7 +408,7 @@ export function NotificationsPage() {
                 : `${t('notifications.form.editTitle')} (${kind === 'email' ? t('notifications.type.email') : t('notifications.type.chat')})`}
             </h2>
             {editingId === null ? (
-              <div className="share-filter-group" role="tablist" aria-label="选择渠道类型">
+              <div className="share-filter-group" role="tablist" aria-label={t('notifications.form.channelTypeAria')}>
                 <button
                   type="button"
                   role="tab"
@@ -416,7 +434,7 @@ export function NotificationsPage() {
                 className="link small"
                 onClick={() => startCreate(kind)}
               >
-                + 转为新增
+                {t('notifications.form.switchCreate')}
               </button>
             )}
           </div>
@@ -425,6 +443,7 @@ export function NotificationsPage() {
               {t('notifications.form.name')}
               <input
                 id={ids.name}
+                name="channelName"
                 value={kind === 'email' ? email.name : chat.name}
                 onChange={(e) =>
                   kind === 'email'
@@ -516,6 +535,7 @@ export function NotificationsPage() {
                   {t('notifications.form.webhook')}
                   <input
                     id={ids.webhook}
+                    name="webhookUrl"
                     value={chat.webhookUrl}
                     onChange={(e) => setChat({ ...chat, webhookUrl: e.target.value })}
                     placeholder={
@@ -526,6 +546,11 @@ export function NotificationsPage() {
                     required={editingId === null}
                   />
                 </label>
+                {editingId !== null && editingWebhookHint && (
+                  <p className="muted small form-hint mono">
+                    {t('notifications.form.webhookCurrent', { url: editingWebhookHint })}
+                  </p>
+                )}
                 <label htmlFor={ids.headers}>
                   {t('notifications.form.headers')}
                   <textarea
@@ -707,7 +732,13 @@ export function NotificationsPage() {
                   <tbody>
                     {logs.data.map((log) => (
                       <tr key={log.id}>
-                        <td>#{log.taskId}</td>
+                        <td>
+                          {log.taskId === null ? (
+                            <span className="tag">{t('notifications.logs.testSend')}</span>
+                          ) : (
+                            `#${log.taskId}`
+                          )}
+                        </td>
                         <td>
                           {log.channelName ?? log.channelId} ({log.channelType ?? '—'})
                         </td>

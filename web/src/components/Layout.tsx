@@ -138,7 +138,7 @@ const NAV_GROUPS: NavGroup[] = [
       },
       {
         to: '/admin/users',
-        label: '用户与权限',
+        labelKey: 'nav.users',
         perm: 'user:manage',
         icon: (
           <svg {...iconProps}>
@@ -174,7 +174,14 @@ export function Layout() {
     navigate('/login', { replace: true });
   };
 
-  const userName = status?.displayName ?? status?.username ?? t('common.notLoggedIn');
+  const rawUserName = status?.displayName ?? status?.username ?? t('common.notLoggedIn');
+  const BUILTIN_ROLE_KEYS: Record<string, MessageKey> = {
+    超级管理员: 'roles.superAdmin',
+    服务管理员: 'roles.serviceAdmin',
+    软件项目负责人: 'roles.projectLead',
+    开发人员: 'roles.developer',
+  };
+  const userName = BUILTIN_ROLE_KEYS[rawUserName] ? t(BUILTIN_ROLE_KEYS[rawUserName]) : rawUserName;
   const userInitial = userName.slice(0, 1).toUpperCase();
   const pendingRegs = status?.pendingRegistrations ?? 0;
 
@@ -210,7 +217,7 @@ export function Layout() {
                       {item.icon}
                       <span>{item.labelKey ? t(item.labelKey) : item.label}</span>
                       {item.to === '/admin/users' && pendingRegs > 0 && (
-                        <span className="nav-badge" aria-label={`${pendingRegs} 条待审批`}>
+                        <span className="nav-badge" aria-label={t('nav.pendingRegs', { count: pendingRegs })}>
                           {pendingRegs}
                         </span>
                       )}
@@ -223,7 +230,7 @@ export function Layout() {
         </nav>
         <div className="sidebar-bottom">
           <div className="sidebar-footer">
-            <Link to="/account" className="user-badge" title="我的账号">
+            <Link to="/account" className="user-badge" title={t('nav.myAccount')}>
               <span className="user-avatar" aria-hidden="true">
                 {userInitial}
               </span>

@@ -232,7 +232,7 @@ export interface Channel {
 
 export interface NotificationLog {
   id: number;
-  taskId: number;
+  taskId: number | null;
   channelId: number;
   channelName: string | null;
   channelType: string | null;

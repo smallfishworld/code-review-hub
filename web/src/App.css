@@ -386,22 +386,13 @@
     grid-template-columns: minmax(0, 1.45fr) minmax(340px, 1fr);
   }
 
-  /* Wide 6-column tables (Providers, Engines, MCP, Memory): side-by-side on
-     widescreen (>= 1360px) where there is plenty of horizontal room, and
-     cleanly full-width stacked on medium laptop viewports so tables never
-     squeeze into scrollbars while top and bottom cards stay edge-aligned. */
   .split.providers-split {
     grid-template-columns: clamp(350px, 32%, 460px) minmax(0, 1fr);
   }
 
-  @media (max-width: 1359px) {
-    .split.providers-split {
-      grid-template-columns: minmax(0, 1fr);
-    }
-  }
-
   @media (max-width: 1140px) {
     .split,
+    .split.providers-split,
     .split.settings-split {
       grid-template-columns: minmax(0, 1fr);
     }
@@ -484,7 +475,8 @@
     margin-block-end: 0;
   }
 
-  label {
+  label,
+  .field-group {
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -492,6 +484,17 @@
     font-weight: 500;
     color: var(--text);
     min-inline-size: 0;
+  }
+
+  .dep-note-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    line-height: 1.45;
+  }
+
+  .dep-note-error {
+    color: var(--danger);
   }
 
   label.checkbox,

@@ -13,6 +13,8 @@ interface NodePickerProps {
   required?: boolean;
   /** id of the visible <label>, so the input keeps its native association. */
   inputId?: string;
+  /** Form field name attribute for accessibility / autofill tools. */
+  name?: string;
 }
 
 const DEBOUNCE_MS = 250;
@@ -34,6 +36,7 @@ export function NodePicker({
   placeholder,
   required,
   inputId,
+  name,
 }: NodePickerProps) {
   const { t } = useI18n();
   const listId = useId();
@@ -43,6 +46,7 @@ export function NodePicker({
   const [open, setOpen] = useState(false);
   const [nodes, setNodes] = useState<RepoNode[]>([]);
   const [loading, setLoading] = useState(false);
+  const [hasLoaded, setHasLoaded] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [exhausted, setExhausted] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -75,6 +79,7 @@ export function NodePicker({
     }
     if (repoChanged) {
       setNodes([]);
+      setHasLoaded(false);
       setError(null);
       setActive(-1);
       setOpen(false);
@@ -105,13 +110,16 @@ export function NodePicker({
         const page = await api.get<RepoNodePage>(`/api/repos/${repoId}/nodes?${params}`);
         // A newer keystroke (or a repo switch) already superseded this one.
         if (ticket !== requestSeq.current) return;
-        setNodes(page.items);
-        cursorRef.current = page.nextCursor;
-        setExhausted(!page.nextCursor);
+        const items = Array.isArray(page?.items) ? page.items : [];
+        setNodes(items);
+        setHasLoaded(true);
+        cursorRef.current = page?.nextCursor;
+        setExhausted(!page?.nextCursor);
         setError(null);
       } catch (err) {
         if (ticket !== requestSeq.current) return;
         setNodes([]);
+        setHasLoaded(true);
         setExhausted(false);
         setError(errorText(err));
       } finally {
@@ -168,6 +176,11 @@ export function NodePicker({
   // should show the recent list, not the single commit the input now holds.
   useEffect(() => {
     if (!open) return;
+    // Load immediately when opening with no filter; only debounce while typing.
+    if (!filter.trim()) {
+      void load('');
+      return;
+    }
     const timer = setTimeout(() => void load(filter), DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [open, filter, load]);
@@ -249,11 +262,21 @@ export function NodePicker({
   const activeId = active >= 0 && nodes[active] ? `${listId}-${active}` : undefined;
 
   return (
-    <div className="combobox" ref={wrapRef}>
+    <div
+      className="combobox"
+      ref={wrapRef}
+      onBlur={(e) => {
+        if (!wrapRef.current?.contains(e.relatedTarget as Node)) {
+          setOpen(false);
+          setActive(-1);
+        }
+      }}
+    >
       <div className="combobox-control">
         <input
           ref={inputRef}
           id={inputId}
+          name={name}
           role="combobox"
           aria-expanded={showPopup}
           aria-controls={listId}
@@ -305,13 +328,15 @@ export function NodePicker({
           style={{ maxBlockSize: placement.maxHeight }}
           onScroll={onPopupScroll}
         >
-          {loading && nodes.length === 0 && <p className="combobox-status">{t('common.loading')}</p>}
+          {(loading || !hasLoaded) && nodes.length === 0 && !error && (
+            <p className="combobox-status">{t('common.loading')}</p>
+          )}
           {error && (
             <p className="combobox-status error" role="status">
               {error}
             </p>
           )}
-          {!error && !loading && nodes.length === 0 && (
+          {!error && !loading && hasLoaded && nodes.length === 0 && (
             <p className="combobox-status">
               {filter.trim() ? t('nodePicker.noMatch', { filter: filter.trim() }) : t('nodePicker.empty')}
             </p>

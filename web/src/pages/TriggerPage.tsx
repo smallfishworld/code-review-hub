@@ -45,7 +45,18 @@ export function TriggerPage() {
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (repoId === '') return;
+    if (repoId === '') {
+      flash.fail(t('trigger.error.selectRepo'));
+      return;
+    }
+    if (mode === 'single' && !node.trim()) {
+      flash.fail(t('trigger.error.enterNode'));
+      return;
+    }
+    if (mode === 'range' && (!from.trim() || !to.trim())) {
+      flash.fail(t('trigger.error.enterRange'));
+      return;
+    }
     setBusy(true);
     setResult(null);
     setWarning(null);
@@ -134,6 +145,7 @@ export function TriggerPage() {
               {t('trigger.form.repo')}
               <select
                 id={ids.repo}
+                name="repoId"
                 value={repoId}
                 onChange={(e) => setRepoId(e.target.value === '' ? '' : Number(e.target.value))}
                 required
@@ -172,10 +184,11 @@ export function TriggerPage() {
             </fieldset>
 
             {mode === 'single' ? (
-              <label htmlFor={ids.node}>
-                {t('trigger.form.node')}
+              <div className="field-group">
+                <label htmlFor={ids.node}>{t('trigger.form.node')}</label>
                 <NodePicker
                   inputId={ids.node}
+                  name="node"
                   label={t('trigger.form.node')}
                   repoId={repoId}
                   value={node}
@@ -183,13 +196,14 @@ export function TriggerPage() {
                   placeholder={placeholder}
                   required
                 />
-              </label>
+              </div>
             ) : (
               <div className="two-col">
-                <label htmlFor={ids.from}>
-                  {t('trigger.form.from')}
+                <div className="field-group">
+                  <label htmlFor={ids.from}>{t('trigger.form.from')}</label>
                   <NodePicker
                     inputId={ids.from}
+                    name="from"
                     label={t('trigger.form.from')}
                     repoId={repoId}
                     value={from}
@@ -197,11 +211,12 @@ export function TriggerPage() {
                     placeholder={placeholder}
                     required
                   />
-                </label>
-                <label htmlFor={ids.to}>
-                  {t('trigger.form.to')}
+                </div>
+                <div className="field-group">
+                  <label htmlFor={ids.to}>{t('trigger.form.to')}</label>
                   <NodePicker
                     inputId={ids.to}
+                    name="to"
                     label={t('trigger.form.to')}
                     repoId={repoId}
                     value={to}
@@ -209,7 +224,7 @@ export function TriggerPage() {
                     placeholder={placeholder}
                     required
                   />
-                </label>
+                </div>
               </div>
             )}
 

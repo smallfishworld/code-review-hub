@@ -1,8 +1,13 @@
 import { spawn } from 'node:child_process';
+import { resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { codeGraphCommand, codeGraphEnv, isReviewIndexName } from './mcp/codeGraph.js';
 
-const [workspace, indexName] = process.argv.slice(2);
+const [rawWorkspace, indexName] = process.argv.slice(2);
+if (rawWorkspace && (rawWorkspace.startsWith('-') || rawWorkspace.includes('\0'))) {
+  throw new Error('Invalid CodeGraph workspace path');
+}
+const workspace = rawWorkspace ? resolve(rawWorkspace) : undefined;
 if (workspace && !isReviewIndexName(indexName ?? '')) {
   throw new Error('CodeGraph requires a managed index');
 }
@@ -14,6 +19,7 @@ const cli = codeGraphCommand([
 const child = spawn(cli.command, cli.args, {
   cwd: workspace,
   env: { ...codeGraphEnv(indexName), CODEGRAPH_HOST_PPID: String(process.pid) },
+  shell: false,
   windowsHide: true,
 });
 child.stdout.pipe(process.stdout, { end: false });

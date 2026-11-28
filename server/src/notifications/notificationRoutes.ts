@@ -137,9 +137,11 @@ export function buildNotificationRoutes(
         } else {
           await chat.send(channelId, context);
         }
+        sender?.logTest(channelId, 'sent', '测试发送成功');
         return { ok: true, message: '发送成功' };
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
+        sender?.logTest(channelId, 'failed', `测试发送失败：${reason}`);
         return reply.code(502).send({ ok: false, message: `发送失败：${reason}` });
       }
     });
