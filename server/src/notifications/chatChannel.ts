@@ -6,9 +6,9 @@ import type { NotificationContext } from './types.js';
  * Chat-bot channel (task 6.3): generic webhook POST.
  *
  * Template modes:
- *  - whole-JSON template: the template text is rendered, then must parse as
- *    JSON — it becomes the request body verbatim (fits platforms with a
- *    structured payload: markdown blocks, cards, ...).
+ *  - whole-JSON template: parse the template, then render placeholders in
+ *    JSON string values. The result becomes the structured request body
+ *    (markdown blocks, cards, ...).
  *  - plain-text template: rendered text is wrapped in the default envelope
  *    `{"text": "<rendered>"}`.
  *  - no template: built-in default text template.
@@ -57,17 +57,22 @@ export function buildChatPayload(
   context: NotificationContext
 ): unknown {
   const source = template && template.trim() !== '' ? template : DEFAULT_TEMPLATE;
-  const rendered = renderTemplate(source, context);
-  const trimmed = rendered.trim();
-  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+  const trimmed = source.trim();
+  // A leading placeholder in a text template is not a JSON object opener.
+  const isJsonObject = trimmed.startsWith('{') && !trimmed.startsWith('{{');
+  if (isJsonObject || trimmed.startsWith('[')) {
     try {
-      return JSON.parse(trimmed) as unknown;
+      // Render decoded string values, not JSON syntax. post() serializes the
+      // result, so repository text can contain quotes, backslashes or newlines.
+      return JSON.parse(trimmed, (_key, value: unknown) =>
+        typeof value === 'string' ? renderTemplate(value, context) : value
+      ) as unknown;
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
-      throw new TemplateError(`JSON 模板渲染后不是合法 JSON：${reason}`);
+      throw new TemplateError(`JSON 模板不是合法 JSON：${reason}`);
     }
   }
-  return { text: rendered };
+  return { text: renderTemplate(source, context) };
 }
 
 /** Build the context used by the test-send endpoint. */

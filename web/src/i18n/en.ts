@@ -520,7 +520,7 @@ export const en: Record<MessageKey, string> = {
   'notifications.form.template': 'Message Template',
   'notifications.form.templateHintPrefix': 'Available placeholders: {placeholders}. Plain text is wrapped in ',
   'notifications.form.templateHintMid': '; templates starting with ',
-  'notifications.form.templateHintSuffix': ' are sent as raw JSON (validated after rendering).',
+  'notifications.form.templateHintSuffix': ' are sent as JSON. Put placeholders inside quoted string values.',
   'notifications.defaultTemplate': '[Code Review] {{repo}} {{node}} {{status}}\nAuthor: {{author}}\nSummary: {{summary}}\nReport: {{report_url}}',
   'notifications.list.title': 'Channel List',
   'notifications.list.caption': 'Notification channels list',

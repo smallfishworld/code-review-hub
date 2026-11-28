@@ -63,6 +63,9 @@ describe('chat template rendering', () => {
 
   it('wraps plain text in the default envelope', () => {
     expect(buildChatPayload('hello {{repo}}', context)).toEqual({ text: 'hello demo-repo' });
+    expect(buildChatPayload('{{repo}}: {{summary}}', context)).toEqual({
+      text: 'demo-repo: 发现 2 条评审意见',
+    });
   });
 
   it('uses the built-in default template when none is configured', () => {
@@ -83,11 +86,28 @@ describe('chat template rendering', () => {
     });
   });
 
-  it('rejects a JSON template that renders to invalid JSON', () => {
-    expect(() => buildChatPayload('{"text": "{{summary}}"}', {
+  it('preserves quotes, line breaks, and backslashes in nested JSON string values', () => {
+    const values = {
       ...context,
-      summary: 'bad "quote"',
-    })).toThrow(TemplateError);
+      summary: '检查 "DMA" 路径 C:\\firmware',
+      commit_message: '修复串口\r\n补充边界测试\t{{repo}}',
+    };
+    const payload = buildChatPayload(
+      '{"items":["摘要：{{summary}}",{"commit":"{{commit_message}}","unknown":"{{unknown}}"}],"count":2,"enabled":true}',
+      values
+    );
+    expect(payload).toEqual({
+      items: [`摘要：${values.summary}`, { commit: values.commit_message, unknown: '{{unknown}}' }],
+      count: 2,
+      enabled: true,
+    });
+    expect(buildChatPayload('摘要：{{summary}}\n{{commit_message}}', values)).toEqual({
+      text: `摘要：${values.summary}\n${values.commit_message}`,
+    });
+  });
+
+  it('still rejects a malformed JSON template', () => {
+    expect(() => buildChatPayload('{"text": "{{summary}}",}', context)).toThrow(TemplateError);
   });
 });
 
@@ -163,6 +183,34 @@ describe('test-send endpoints', () => {
       expect(received).toHaveLength(1);
       expect(received[0].headers['x-token']).toBe('abc');
       expect(JSON.parse(received[0].body)).toHaveProperty('text');
+    } finally {
+      server.close();
+    }
+  });
+
+  it('sends quoted and multiline review text intact to a JSON webhook', async () => {
+    const received: { body: string; headers: Record<string, string | string[] | undefined> }[] = [];
+    const server = await startHttpStub(200, '{"ok":true}', received);
+    try {
+      const created = await post('/api/notifications/channels', {
+        type: 'chat',
+        name: 'gateway',
+        webhookUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/hook`,
+        template: '{"receiverUid":"{{author}}","body":"摘要：{{summary}}\\n上库日志：{{commit_message}}"}',
+      });
+      expect(created.statusCode).toBe(201);
+      const id = (created.json() as { id: number }).id;
+      const summary = '请复查 "DMA" 缓冲区';
+      const commitMessage = '修复串口\n补充边界测试';
+      const res = await post(`/api/notifications/channels/${id}/test`, {
+        context: { author: context.author, summary, commit_message: commitMessage },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(received).toHaveLength(1);
+      expect(JSON.parse(received[0].body)).toEqual({
+        receiverUid: context.author,
+        body: `摘要：${summary}\n上库日志：${commitMessage}`,
+      });
     } finally {
       server.close();
     }
